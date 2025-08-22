@@ -1,0 +1,48 @@
+const express = require('express');
+const multer = require('multer');
+const {
+  getProfile,
+  updateProfile,
+  uploadAvatar,
+  deleteAccount,
+  getUserById
+} = require('../controllers/userController');
+const { protect } = require('../middleware/auth');
+const { validateProfileUpdate, validate } = require('../middleware/validation');
+
+const router = express.Router();
+
+// Configure multer for file uploads
+const storage = multer.diskStorage({
+  destination: function (req, file, cb) {
+    cb(null, '/tmp/'); // Use temp directory
+  },
+  filename: function (req, file, cb) {
+    cb(null, Date.now() + '-' + Math.round(Math.random() * 1E9) + '.' + file.originalname.split('.').pop());
+  }
+});
+
+const upload = multer({
+  storage: storage,
+  limits: {
+    fileSize: parseInt(process.env.MAX_FILE_SIZE) || 10 * 1024 * 1024 // 10MB
+  },
+  fileFilter: (req, file, cb) => {
+    if (file.mimetype.startsWith('image/')) {
+      cb(null, true);
+    } else {
+      cb(new Error('Only image files are allowed'), false);
+    }
+  }
+});
+
+// Protected routes
+router.get('/profile', protect, getProfile);
+router.put('/profile', protect, validateProfileUpdate, validate, updateProfile);
+router.post('/avatar', protect, upload.single('avatar'), uploadAvatar);
+router.delete('/account', protect, deleteAccount);
+
+// Public routes
+router.get('/:id', getUserById);
+
+module.exports = router;

@@ -1,0 +1,41 @@
+{
+  "name": "adopt-a-farmer-backend",
+  "version": "1.0.0",
+  "description": "Backend API for Adopt-A-Farmer platform",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "nodemon src/server.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "farming",
+    "crowdfunding",
+    "agriculture",
+    "adoption"
+  ],
+  "author": "Adopt-A-Farmer Team",
+  "license": "MIT",
+  "dependencies": {
+    "express": "^4.18.2",
+    "mongoose": "^8.0.0",
+    "cors": "^2.8.5",
+    "helmet": "^7.1.0",
+    "dotenv": "^16.3.1",
+    "bcryptjs": "^2.4.3",
+    "jsonwebtoken": "^9.0.2",
+    "multer": "^1.4.5-lts.1",
+    "cloudinary": "^1.41.0",
+    "multer-storage-cloudinary": "^4.0.0",
+    "paystack": "^2.0.1",
+    "express-rate-limit": "^7.1.5",
+    "express-validator": "^7.0.1",
+    "socket.io": "^4.7.4",
+    "uuid": "^9.0.1",
+    "moment": "^2.29.4"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.2",
+    "concurrently": "^8.2.2"
+  }
+}
