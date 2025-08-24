@@ -112,7 +112,7 @@ const paymentSchema = new mongoose.Schema({
 
 // Indexes for better query performance
 paymentSchema.index({ user: 1, status: 1 });
-paymentSchema.index({ 'gatewayResponse.reference': 1 });
+// Note: gatewayResponse.reference index is automatically created by unique: true
 paymentSchema.index({ paymentType: 1, status: 1 });
 paymentSchema.index({ paidAt: -1 });
 

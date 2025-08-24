@@ -60,6 +60,6 @@ const withdrawalRequestSchema = new mongoose.Schema({
 // Index for farmer queries
 withdrawalRequestSchema.index({ farmer: 1, createdAt: -1 });
 withdrawalRequestSchema.index({ status: 1 });
-withdrawalRequestSchema.index({ reference: 1 });
+// Note: reference index is automatically created by unique: true
 
 module.exports = mongoose.model('WithdrawalRequest', withdrawalRequestSchema);
