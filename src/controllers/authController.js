@@ -50,13 +50,13 @@ const register = async (req, res) => {
       await FarmerProfile.create({
         user: user._id,
         farmName: `${firstName} ${lastName}'s Farm`,
-        description: '',
+        description: 'New farmer profile - please update your farm description',
         location: {
-          county: '',
-          subCounty: ''
+          county: 'Not specified',
+          subCounty: 'Not specified'
         },
         farmSize: {
-          value: 0.1,
+          value: 1,
           unit: 'acres'
         },
         farmingType: ['crop'],

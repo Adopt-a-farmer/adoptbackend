@@ -17,13 +17,7 @@ const farmerProfileSchema = new mongoose.Schema({
     type: String,
     required: [true, 'Farm description is required'],
     maxlength: [1000, 'Description cannot be more than 1000 characters'],
-    validate: {
-      validator: function(v) {
-        // Reject default values
-        return v !== 'New farmer profile - please update your information';
-      },
-      message: 'Please provide a custom description for your farm'
-    }
+    default: 'New farmer profile - please update your farm description'
   },
   establishedYear: {
     type: Number,
@@ -45,22 +39,12 @@ const farmerProfileSchema = new mongoose.Schema({
     county: {
       type: String,
       required: [true, 'County is required'],
-      validate: {
-        validator: function(v) {
-          return v && v.trim() !== '' && v !== 'Default County';
-        },
-        message: 'Please provide a valid county name'
-      }
+      default: 'Not specified'
     },
     subCounty: {
       type: String,
       required: [true, 'Sub-county is required'],
-      validate: {
-        validator: function(v) {
-          return v && v.trim() !== '' && v !== 'Default Sub-County';
-        },
-        message: 'Please provide a valid sub-county name'
-      }
+      default: 'Not specified'
     },
     village: String,
     coordinates: {
@@ -71,7 +55,7 @@ const farmerProfileSchema = new mongoose.Schema({
   farmSize: {
     value: {
       type: Number,
-      required: [true, 'Farm size is required'],
+      default: 1,
       min: [0.1, 'Farm size must be at least 0.1 acres']
     },
     unit: {
@@ -83,7 +67,7 @@ const farmerProfileSchema = new mongoose.Schema({
   farmingType: {
     type: [String],
     enum: ['crop', 'livestock', 'mixed', 'aquaculture', 'apiary'],
-    required: [true, 'Farming type is required']
+    default: ['crop']
   },
   // High-level crop categories selected by farmer
   cropTypes: {
