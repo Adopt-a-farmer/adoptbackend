@@ -42,12 +42,45 @@ const limiter = rateLimit({
 
 // Middleware
 app.use(helmet());
-app.use(cors({
-  origin: '*', // Allow all origins
+
+// CORS configuration
+const corsOptions = {
+  origin: function (origin, callback) {
+    // Allow requests with no origin (like mobile apps, Postman, etc.)
+    if (!origin) return callback(null, true);
+    
+    const allowedOrigins = [
+      'http://localhost:3000',
+      'http://localhost:5173',
+      'http://localhost:5174',
+      'http://localhost:8080',
+      'https://adoptafarmapp.vercel.app',
+      'https://adoptafarm.vercel.app',
+      'https://adopt-a-farm.vercel.app',
+      'https://adopt-farmer.vercel.app',
+      process.env.FRONTEND_URL,
+      process.env.VERCEL_URL
+    ].filter(Boolean); // Remove any undefined values
+    
+    // Allow any vercel.app subdomain
+    if (origin.includes('.vercel.app') || allowedOrigins.includes(origin)) {
+      return callback(null, true);
+    }
+    
+    // Allow any localhost with any port for development
+    if (origin.includes('localhost') || origin.includes('127.0.0.1')) {
+      return callback(null, true);
+    }
+    
+    callback(new Error('Not allowed by CORS'));
+  },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'x-access-token']
-}));
+  allowedHeaders: ['Content-Type', 'Authorization', 'x-access-token', 'Origin', 'Accept'],
+  exposedHeaders: ['set-cookie']
+};
+
+app.use(cors(corsOptions));
 app.use(limiter);
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
@@ -97,13 +130,35 @@ const server = app.listen(PORT, () => {
 // Socket.IO setup
 const io = require('socket.io')(server, {
   cors: {
-    origin: [
-      process.env.FRONTEND_URL || 'http://localhost:5173',
-      'http://localhost:8080',
-      'http://localhost:3000',
-      'http://localhost:5174'
-    ],
-    methods: ['GET', 'POST']
+    origin: function (origin, callback) {
+      // Allow requests with no origin
+      if (!origin) return callback(null, true);
+      
+      const allowedOrigins = [
+        'http://localhost:3000',
+        'http://localhost:5173',
+        'http://localhost:5174',
+        'http://localhost:8080',
+        'https://adoptafarmapp.vercel.app',
+        'https://adoptafarm.vercel.app',
+        'https://adopt-a-farm.vercel.app',
+        'https://adopt-farmer.vercel.app',
+        process.env.FRONTEND_URL,
+        process.env.VERCEL_URL
+      ].filter(Boolean);
+      
+      if (origin.includes('.vercel.app') || allowedOrigins.includes(origin)) {
+        return callback(null, true);
+      }
+      
+      if (origin.includes('localhost') || origin.includes('127.0.0.1')) {
+        return callback(null, true);
+      }
+      
+      callback(null, false);
+    },
+    methods: ['GET', 'POST'],
+    credentials: true
   }
 });
 
