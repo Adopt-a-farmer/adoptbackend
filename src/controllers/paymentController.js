@@ -16,6 +16,11 @@ const { v4: uuidv4 } = require('uuid');
 // @access  Private
 const initializePaymentController = async (req, res) => {
   try {
+    console.log('Payment initialization request:', {
+      body: req.body,
+      user: req.user ? { id: req.user._id, email: req.user.email } : null
+    });
+
     const {
       amount,
       currency = 'KES',
@@ -28,15 +33,23 @@ const initializePaymentController = async (req, res) => {
     } = req.body;
 
     const user = req.user;
+    if (!user) {
+      return res.status(401).json({
+        success: false,
+        message: 'User authentication required'
+      });
+    }
+
     const reference = `AAF_${Date.now()}_${uuidv4().substr(0, 8)}`;
 
     // Calculate fees
     const fees = calculateFees(amount);
+    console.log('Calculated fees:', fees);
 
     // Create payment record
     const payment = await Payment.create({
       user: user._id,
-      adoption,
+      adoption: metadata?.adoptionId, // Link to adoption if provided
       crowdfunding,
       paymentType,
       amount,
@@ -57,13 +70,15 @@ const initializePaymentController = async (req, res) => {
       fees
     });
 
+    console.log('Payment record created:', payment._id);
+
     // Initialize Paystack payment
     const paystackData = {
       email: user.email,
-      amount: (amount + fees.gateway + fees.platform) * 100, // Convert to kobo and include fees
+      amount: amount + fees.gateway + fees.platform, // Amount in KES - paystackService will convert to kobo
       reference,
       currency: currency.toUpperCase(),
-      callback_url: `${process.env.FRONTEND_URL}/payment/callback?reference=${reference}`,
+      callback_url: process.env.LIVE_CALLBACK_URL || `${process.env.FRONTEND_URL}/payment/callback?reference=${reference}`,
       metadata: {
         payment_id: payment._id.toString(),
         user_id: user._id.toString(),
@@ -84,8 +99,10 @@ const initializePaymentController = async (req, res) => {
     };
 
     const paystackResponse = await initializePayment(paystackData);
+    console.log('Paystack response:', paystackResponse);
 
     if (!paystackResponse.status) {
+      console.error('Paystack initialization failed:', paystackResponse);
       payment.status = 'failed';
       payment.failureReason = 'Payment initialization failed';
       await payment.save();
@@ -312,26 +329,46 @@ const processSuccessfulPayment = async (payment) => {
   try {
     switch (payment.paymentType) {
       case 'adoption':
+        // Find adoption by payment reference or metadata
+        let adoption = null;
         if (payment.adoption) {
-          const adoption = await Adoption.findById(payment.adoption);
-          if (adoption && adoption.status === 'pending') {
-            adoption.status = 'active';
-            adoption.paymentPlan.totalPaid += payment.netAmount;
-            await adoption.save();
+          adoption = await Adoption.findById(payment.adoption);
+        } else if (payment.metadata && payment.metadata.farmerId) {
+          // Find adoption by farmer and adopter
+          adoption = await Adoption.findOne({
+            farmer: payment.metadata.farmerId,
+            adopter: payment.user,
+            status: 'pending'
+          });
+        }
+        
+        if (adoption && adoption.status === 'pending') {
+          adoption.status = 'active';
+          adoption.startDate = new Date();
+          if (!adoption.paymentPlan) {
+            adoption.paymentPlan = { totalPaid: 0 };
+          }
+          adoption.paymentPlan.totalPaid = (adoption.paymentPlan.totalPaid || 0) + payment.amount;
+          await adoption.save();
 
-            // Update farmer stats
-            const farmer = await FarmerProfile.findOne({ user: adoption.farmer });
-            if (farmer) {
-              farmer.adoptionStats.totalFunding += payment.netAmount;
-              await farmer.save();
+          // Update farmer stats
+          const farmer = await FarmerProfile.findOne({ user: adoption.farmer });
+          if (farmer) {
+            if (!farmer.adoptionStats) {
+              farmer.adoptionStats = { totalFunding: 0, currentAdoptions: 0 };
             }
+            farmer.adoptionStats.totalFunding = (farmer.adoptionStats.totalFunding || 0) + payment.amount;
+            await farmer.save();
+          }
 
-            // Update adopter stats
-            const adopter = await AdopterProfile.findOne({ user: adoption.adopter });
-            if (adopter) {
-              adopter.investmentProfile.totalInvested += payment.netAmount;
-              await adopter.save();
+          // Update adopter stats
+          const adopter = await AdopterProfile.findOne({ user: adoption.adopter });
+          if (adopter) {
+            if (!adopter.investmentProfile) {
+              adopter.investmentProfile = { totalInvested: 0 };
             }
+            adopter.investmentProfile.totalInvested = (adopter.investmentProfile.totalInvested || 0) + payment.amount;
+            await adopter.save();
           }
         }
         break;

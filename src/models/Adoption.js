@@ -13,7 +13,7 @@ const adoptionSchema = new mongoose.Schema({
   },
   adoptionType: {
     type: String,
-    enum: ['full', 'partial', 'crop_specific', 'livestock_specific'],
+    enum: ['full', 'partial', 'crop_specific', 'livestock_specific', 'monthly_support'],
     required: [true, 'Adoption type is required']
   },
   adoptionDetails: {
@@ -31,13 +31,28 @@ const adoptionSchema = new mongoose.Schema({
     duration: {
       start: {
         type: Date,
-        required: true
+        required: function() {
+          return this.adoptionType !== 'monthly_support';
+        }
       },
       end: {
         type: Date,
-        required: true
+        required: function() {
+          return this.adoptionType !== 'monthly_support';
+        }
       }
-    }
+    },
+    monthlyContribution: {
+      type: Number,
+      required: function() {
+        return this.adoptionType === 'monthly_support';
+      }
+    },
+    currency: {
+      type: String,
+      default: 'KES'
+    },
+    message: String
   },
   paymentPlan: {
     type: {

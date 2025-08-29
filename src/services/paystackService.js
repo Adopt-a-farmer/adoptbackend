@@ -6,8 +6,9 @@ const initializePayment = async (paymentData) => {
   try {
     const response = await paystack.transaction.initialize({
       email: paymentData.email,
-      amount: paymentData.amount * 100, // Convert to kobo
+      amount: paymentData.amount * 100, // Convert to kobo (or smallest currency unit)
       reference: paymentData.reference,
+      currency: paymentData.currency || 'KES', // Default to KES if not specified
       callback_url: paymentData.callback_url,
       metadata: paymentData.metadata,
       channels: ['card', 'bank', 'ussd', 'qr', 'mobile_money', 'bank_transfer']

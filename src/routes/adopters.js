@@ -4,6 +4,7 @@ const {
   updateAdopterProfile,
   getAdoptedFarmers,
   adoptFarmer,
+  adoptFarmerWithPayment,
   getPaymentHistory,
   getVisits,
   getInvestmentAnalytics,
@@ -26,6 +27,7 @@ router.post('/adopt', adoptFarmer); // Alias for frontend compatibility
 router.put('/profile', updateAdopterProfile);
 router.get('/adopted-farmers', getAdoptedFarmers);
 router.post('/adopt-farmer', adoptFarmer);
+router.post('/adopt-with-payment', adoptFarmerWithPayment);
 router.get('/payments', getPaymentHistory);
 router.get('/visits', getVisits);
 router.get('/analytics', getInvestmentAnalytics);

@@ -5,6 +5,7 @@ const Payment = require('../models/Payment');
 const FarmVisit = require('../models/FarmVisit');
 const ExpertMentorship = require('../models/ExpertMentorship');
 const Message = require('../models/Message');
+const { initializePayment } = require('../services/paystackService');
 
 // @desc    Get adopter dashboard
 // @route   GET /api/adopters/dashboard
@@ -171,6 +172,16 @@ const adoptFarmer = async (req, res) => {
 
     console.log('Adopt farmer request:', { adopterId, farmerId, adoptionDetails, paymentPlan });
 
+    // Validate required fields for monthly support
+    if (adoptionType === 'monthly_support') {
+      if (!adoptionDetails?.monthlyContribution && !paymentPlan?.amount) {
+        return res.status(400).json({
+          success: false,
+          message: 'Monthly contribution amount is required for monthly support adoption'
+        });
+      }
+    }
+
     // Check if farmer exists - try both farmer profile ID and user ID
     let farmer = await FarmerProfile.findById(farmerId);
     if (!farmer) {
@@ -207,12 +218,22 @@ const adoptFarmer = async (req, res) => {
       adopter: adopterId,
       farmer: farmerUserId,
       adoptionType,
-      monthlyContribution: adoptionDetails?.monthlyContribution || paymentPlan?.amount,
-      currency: adoptionDetails?.currency || paymentPlan?.currency || 'KES',
-      message: adoptionDetails?.message,
       status: 'pending', // Will be activated after payment
-      adoptionDetails,
-      paymentPlan
+      adoptionDetails: {
+        ...adoptionDetails,
+        monthlyContribution: adoptionDetails?.monthlyContribution || paymentPlan?.amount,
+        currency: adoptionDetails?.currency || paymentPlan?.currency || 'KES',
+        message: adoptionDetails?.message || '',
+        // Only add duration for non-monthly support types
+        ...(adoptionType !== 'monthly_support' && {
+          duration: {
+            start: adoptionDetails?.duration?.start || new Date(),
+            end: adoptionDetails?.duration?.end || new Date(Date.now() + 365 * 24 * 60 * 60 * 1000) // 1 year from now
+          }
+        })
+      },
+      paymentPlan,
+      paymentReference: req.body.paymentReference // Link to payment
     };
 
     const adoption = await Adoption.create(adoptionData);
@@ -255,6 +276,151 @@ const adoptFarmer = async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Server error while adopting farmer'
+    });
+  }
+};
+
+// @desc    Adopt farmer with payment integration
+// @route   POST /api/adopters/adopt-with-payment
+// @access  Private (Adopter only)
+const adoptFarmerWithPayment = async (req, res) => {
+  try {
+    const adopterId = req.user._id;
+    const {
+      farmerId,
+      adoptionType = 'monthly_support',
+      adoptionDetails,
+      paymentPlan
+    } = req.body;
+
+    console.log('Adopt farmer with payment request:', { adopterId, farmerId, adoptionDetails, paymentPlan });
+
+    // Validate required fields for monthly support
+    if (adoptionType === 'monthly_support') {
+      if (!adoptionDetails?.monthlyContribution && !paymentPlan?.amount) {
+        return res.status(400).json({
+          success: false,
+          message: 'Monthly contribution amount is required for monthly support adoption'
+        });
+      }
+    }
+
+    // Check if farmer exists
+    let farmer = await FarmerProfile.findById(farmerId);
+    if (!farmer) {
+      farmer = await FarmerProfile.findOne({ user: farmerId });
+    }
+
+    if (!farmer) {
+      return res.status(404).json({
+        success: false,
+        message: 'Farmer not found'
+      });
+    }
+
+    const farmerUserId = farmer.user;
+
+    // Check if already adopted
+    const existingAdoption = await Adoption.findOne({
+      adopter: adopterId,
+      farmer: farmerUserId,
+      status: { $in: ['pending', 'active'] }
+    });
+
+    if (existingAdoption) {
+      return res.status(400).json({
+        success: false,
+        message: 'You have already adopted this farmer'
+      });
+    }
+
+    // Create adoption first
+    const adoptionData = {
+      adopter: adopterId,
+      farmer: farmerUserId,
+      adoptionType,
+      status: 'pending',
+      adoptionDetails: {
+        ...adoptionDetails,
+        monthlyContribution: adoptionDetails?.monthlyContribution || paymentPlan?.amount,
+        currency: adoptionDetails?.currency || paymentPlan?.currency || 'KES',
+        message: adoptionDetails?.message || '',
+        ...(adoptionType !== 'monthly_support' && {
+          duration: {
+            start: adoptionDetails?.duration?.start || new Date(),
+            end: adoptionDetails?.duration?.end || new Date(Date.now() + 365 * 24 * 60 * 60 * 1000)
+          }
+        })
+      },
+      paymentPlan
+    };
+
+    const adoption = await Adoption.create(adoptionData);
+
+    // Initialize payment
+    const amount = adoptionDetails?.monthlyContribution || paymentPlan?.amount;
+    const reference = `AAF_${Date.now()}_${adoption._id.toString().substr(-8)}`;
+
+    const paystackData = {
+      email: req.user.email,
+      amount: amount,
+      reference,
+      currency: (adoptionDetails?.currency || 'KES').toUpperCase(),
+      callback_url: process.env.LIVE_CALLBACK_URL || `${process.env.FRONTEND_URL}/payment/callback?reference=${reference}`,
+      metadata: {
+        adoption_id: adoption._id.toString(),
+        user_id: req.user._id.toString(),
+        farmer_id: farmerUserId.toString(),
+        payment_type: 'adoption',
+        adoption_type: adoptionType,
+        custom_fields: [
+          {
+            display_name: "Adoption Type",
+            variable_name: "adoption_type", 
+            value: adoptionType
+          },
+          {
+            display_name: "Farmer",
+            variable_name: "farmer_name",
+            value: farmer.businessName || `Farmer ${farmer._id.toString().substr(-4)}`
+          }
+        ]
+      }
+    };
+
+    const paystackResponse = await initializePayment(paystackData);
+
+    if (!paystackResponse.status) {
+      // Delete the adoption if payment initialization fails
+      await Adoption.findByIdAndDelete(adoption._id);
+      return res.status(400).json({
+        success: false,
+        message: 'Payment initialization failed',
+        error: paystackResponse.message
+      });
+    }
+
+    // Update adoption with payment reference
+    adoption.paymentReference = reference;
+    await adoption.save();
+
+    res.status(201).json({
+      success: true,
+      message: 'Adoption created and payment initialized successfully',
+      data: {
+        adoption: adoption,
+        payment: {
+          authorization_url: paystackResponse.data.authorization_url,
+          access_code: paystackResponse.data.access_code,
+          reference: paystackResponse.data.reference
+        }
+      }
+    });
+  } catch (error) {
+    console.error('Adopt farmer with payment error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error while creating adoption with payment'
     });
   }
 };
@@ -584,6 +750,7 @@ module.exports = {
   updateAdopterProfile,
   getAdoptedFarmers,
   adoptFarmer,
+  adoptFarmerWithPayment,
   getPaymentHistory,
   getVisits,
   getInvestmentAnalytics,
