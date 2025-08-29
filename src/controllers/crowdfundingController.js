@@ -341,11 +341,75 @@ const addProjectUpdate = async (req, res) => {
   }
 };
 
+// @desc    Get user's backed projects
+// @route   GET /api/crowdfunding/backed-projects
+// @access  Private
+const getBackedProjects = async (req, res) => {
+  try {
+    const userId = req.user._id;
+
+    // Find payments made by this user for crowdfunding projects
+    const payments = await Payment.find({
+      user: userId,
+      type: 'crowdfunding',
+      status: 'success'
+    }).populate({
+      path: 'metadata.projectId',
+      model: 'CrowdfundingProject',
+      populate: {
+        path: 'farmer',
+        select: 'firstName lastName avatar farmName location'
+      }
+    });
+
+    // Extract unique projects from payments
+    const projectMap = new Map();
+    let totalBacked = 0;
+
+    payments.forEach(payment => {
+      const project = payment.metadata?.projectId;
+      if (project) {
+        if (!projectMap.has(project._id.toString())) {
+          projectMap.set(project._id.toString(), {
+            ...project.toObject(),
+            userContribution: 0,
+            backingDate: payment.createdAt
+          });
+        }
+        const existing = projectMap.get(project._id.toString());
+        existing.userContribution += payment.amount;
+        totalBacked += payment.amount;
+      }
+    });
+
+    const backedProjects = Array.from(projectMap.values());
+
+    res.json({
+      success: true,
+      data: {
+        projects: backedProjects,
+        summary: {
+          totalProjects: backedProjects.length,
+          totalBacked,
+          currency: 'KES'
+        }
+      }
+    });
+  } catch (error) {
+    console.error('Error fetching backed projects:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error fetching backed projects'
+    });
+  }
+};
+
 module.exports = {
   getCrowdfundingProjects,
   getCrowdfundingProject,
   createCrowdfundingProject,
   backProject,
   verifyCrowdfundingPayment,
-  addProjectUpdate
+  addProjectUpdate,
+  getBackedProjects
 };

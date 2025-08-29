@@ -6,7 +6,8 @@ const {
   createCrowdfundingProject,
   backProject,
   verifyCrowdfundingPayment,
-  addProjectUpdate
+  addProjectUpdate,
+  getBackedProjects
 } = require('../controllers/crowdfundingController');
 const { protect, authorize } = require('../middleware/auth');
 
@@ -16,6 +17,9 @@ router.get('/projects/:id', getCrowdfundingProject);
 router.post('/projects', protect, authorize(['farmer']), createCrowdfundingProject);
 router.post('/projects/:id/back', protect, backProject);
 router.post('/projects/:id/updates', protect, addProjectUpdate);
+
+// User-specific routes
+router.get('/backed-projects', protect, getBackedProjects);
 
 // Payment routes
 router.post('/verify-payment', protect, verifyCrowdfundingPayment);

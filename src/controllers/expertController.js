@@ -712,7 +712,10 @@ const getExpertConversations = async (req, res) => {
 
     res.json({
       success: true,
-      data: formattedConversations
+      data: {
+        conversations: formattedConversations,
+        totalUnread: formattedConversations.reduce((total, conv) => total + conv.unreadCount, 0)
+      }
     });
   } catch (error) {
     console.error('Get expert conversations error:', error);
