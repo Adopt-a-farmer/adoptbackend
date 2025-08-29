@@ -18,8 +18,9 @@ const initializePaymentController = async (req, res) => {
   try {
     const {
       amount,
-      paymentType,
-      paymentMethod,
+      currency = 'KES',
+      paymentType = 'adoption',
+      paymentMethod = 'card',
       adoption,
       crowdfunding,
       description,
@@ -39,15 +40,16 @@ const initializePaymentController = async (req, res) => {
       crowdfunding,
       paymentType,
       amount,
+      currency,
       paymentMethod,
       paymentGateway: 'paystack',
       gatewayResponse: {
         reference
       },
       status: 'pending',
-      description,
+      description: description || `${paymentType} payment`,
       metadata: {
-        customerName: user.fullName,
+        customerName: `${user.firstName || ''} ${user.lastName || ''}`.trim(),
         customerEmail: user.email,
         customerPhone: user.phone,
         ...metadata
@@ -58,9 +60,10 @@ const initializePaymentController = async (req, res) => {
     // Initialize Paystack payment
     const paystackData = {
       email: user.email,
-      amount: amount + fees.gateway + fees.platform, // Include fees
+      amount: (amount + fees.gateway + fees.platform) * 100, // Convert to kobo and include fees
       reference,
-      callback_url: `${process.env.FRONTEND_URL}/payment/callback`,
+      currency: currency.toUpperCase(),
+      callback_url: `${process.env.FRONTEND_URL}/payment/callback?reference=${reference}`,
       metadata: {
         payment_id: payment._id.toString(),
         user_id: user._id.toString(),
@@ -74,7 +77,7 @@ const initializePaymentController = async (req, res) => {
           {
             display_name: "User Name",
             variable_name: "user_name",
-            value: user.fullName
+            value: `${user.firstName || ''} ${user.lastName || ''}`.trim()
           }
         ]
       }

@@ -164,13 +164,20 @@ const adoptFarmer = async (req, res) => {
     const adopterId = req.user._id;
     const {
       farmerId,
-      adoptionType,
+      adoptionType = 'monthly_support',
       adoptionDetails,
       paymentPlan
     } = req.body;
 
-    // Check if farmer exists
-    const farmer = await FarmerProfile.findOne({ user: farmerId });
+    console.log('Adopt farmer request:', { adopterId, farmerId, adoptionDetails, paymentPlan });
+
+    // Check if farmer exists - try both farmer profile ID and user ID
+    let farmer = await FarmerProfile.findById(farmerId);
+    if (!farmer) {
+      // Try finding by user ID
+      farmer = await FarmerProfile.findOne({ user: farmerId });
+    }
+
     if (!farmer) {
       return res.status(404).json({
         success: false,
@@ -178,11 +185,14 @@ const adoptFarmer = async (req, res) => {
       });
     }
 
+    // Get the farmer's user ID for adoption
+    const farmerUserId = farmer.user;
+
     // Check if already adopted
     const existingAdoption = await Adoption.findOne({
       adopter: adopterId,
-      farmer: farmerId,
-      status: 'active'
+      farmer: farmerUserId,
+      status: { $in: ['pending', 'active'] }
     });
 
     if (existingAdoption) {
@@ -192,36 +202,59 @@ const adoptFarmer = async (req, res) => {
       });
     }
 
-    // Create adoption
-    const adoption = await Adoption.create({
+    // Create adoption with proper structure
+    const adoptionData = {
       adopter: adopterId,
-      farmer: farmerId,
+      farmer: farmerUserId,
       adoptionType,
+      monthlyContribution: adoptionDetails?.monthlyContribution || paymentPlan?.amount,
+      currency: adoptionDetails?.currency || paymentPlan?.currency || 'KES',
+      message: adoptionDetails?.message,
+      status: 'pending', // Will be activated after payment
       adoptionDetails,
-      paymentPlan,
-      status: 'pending' // Will be activated after payment
-    });
+      paymentPlan
+    };
 
-    // Update adoption stats
-    farmer.adoptionStats.currentAdoptions += 1;
+    const adoption = await Adoption.create(adoptionData);
+
+    // Update farmer adoption stats
+    if (farmer.adoptionStats) {
+      farmer.adoptionStats.currentAdoptions = (farmer.adoptionStats.currentAdoptions || 0) + 1;
+    } else {
+      farmer.adoptionStats = { currentAdoptions: 1 };
+    }
     await farmer.save();
 
     // Update adopter stats
     const adopter = await AdopterProfile.findOne({ user: adopterId });
-    adopter.adoptionHistory.totalAdoptions += 1;
-    adopter.adoptionHistory.activeAdoptions += 1;
-    await adopter.save();
+    if (adopter) {
+      if (adopter.adoptionHistory) {
+        adopter.adoptionHistory.totalAdoptions = (adopter.adoptionHistory.totalAdoptions || 0) + 1;
+        adopter.adoptionHistory.activeAdoptions = (adopter.adoptionHistory.activeAdoptions || 0) + 1;
+      } else {
+        adopter.adoptionHistory = {
+          totalAdoptions: 1,
+          activeAdoptions: 1
+        };
+      }
+      await adopter.save();
+    }
+
+    // Populate the adoption before returning
+    const populatedAdoption = await Adoption.findById(adoption._id)
+      .populate('adopter', 'firstName lastName avatar email')
+      .populate('farmer', 'firstName lastName avatar email');
 
     res.status(201).json({
       success: true,
       message: 'Farmer adopted successfully',
-      data: { adoption }
+      data: { adoption: populatedAdoption }
     });
   } catch (error) {
     console.error('Adopt farmer error:', error);
     res.status(500).json({
       success: false,
-      message: 'Server error'
+      message: 'Server error while adopting farmer'
     });
   }
 };
