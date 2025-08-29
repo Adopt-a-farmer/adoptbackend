@@ -373,6 +373,40 @@ const getFarmingVideos = async (req, res) => {
   }
 };
 
+// @desc    Get knowledge hub stats
+// @route   GET /api/knowledge/stats
+// @access  Public
+const getKnowledgeStats = async (req, res) => {
+  try {
+    const totalArticles = await KnowledgeArticle.countDocuments({ status: 'published' });
+    
+    const totalViews = await KnowledgeArticle.aggregate([
+      { $match: { status: 'published' } },
+      { $group: { _id: null, total: { $sum: '$views' } } }
+    ]);
+    
+    const categories = await KnowledgeArticle.distinct('category', { status: 'published' });
+    
+    const experts = await KnowledgeArticle.distinct('author', { status: 'published' });
+    
+    res.json({
+      success: true,
+      stats: {
+        totalArticles,
+        totalViews: totalViews[0]?.total || 0,
+        totalExperts: experts.length,
+        categories
+      }
+    });
+  } catch (error) {
+    console.error('Get knowledge stats error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error'
+    });
+  }
+};
+
 module.exports = {
   getKnowledgeArticles,
   getKnowledgeArticle,
@@ -380,5 +414,6 @@ module.exports = {
   toggleArticleLike,
   getFarmingCalendar,
   createCalendarEntry,
-  getFarmingVideos
+  getFarmingVideos,
+  getKnowledgeStats
 };

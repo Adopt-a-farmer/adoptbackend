@@ -8,13 +8,12 @@ const farmVisitSchema = new mongoose.Schema({
   },
   farmer: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'User',
+    ref: 'User', // Reference user directly, not farmer profile
     required: true
   },
   adoption: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'Adoption',
-    required: true
+    ref: 'Adoption'
   },
   visitType: {
     type: String,
@@ -23,7 +22,16 @@ const farmVisitSchema = new mongoose.Schema({
   },
   requestedDate: {
     type: Date,
-    required: [true, 'Requested visit date is required']
+    required: [true, 'Requested visit date is required'],
+    validate: {
+      validator: function(v) {
+        // Ensure date is not in the past (with some tolerance for same day)
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        return v >= today;
+      },
+      message: 'Visit date cannot be in the past'
+    }
   },
   confirmedDate: Date,
   duration: {

@@ -9,10 +9,16 @@ const {
   uploadFarmVideos,
   getFarmerDashboard,
   getFarmerAdopters,
-  deleteFarmMedia
+  deleteFarmMedia,
+  getFarmerReports,
+  getFarmerSettings,
+  updateFarmerSettings,
+  changeFarmerPassword,
+  getFarmerExperts
 } = require('../controllers/farmerController');
 const { protect, authorize } = require('../middleware/auth');
 const { validateFarmerProfile, validateFarmerProfilePartial, validate } = require('../middleware/validation');
+const { cleanupFarmerProfiles } = require('../utils/cleanupFarmerProfiles');
 
 const router = express.Router();
 
@@ -55,6 +61,78 @@ router.put('/profile', protect, authorize('farmer'), validateFarmerProfile, vali
 router.patch('/profile', protect, authorize('farmer'), validateFarmerProfilePartial, validate, updateFarmerProfile);
 router.get('/dashboard', protect, authorize('farmer'), getFarmerDashboard);
 router.get('/adopters', protect, authorize('farmer'), getFarmerAdopters);
+router.get('/reports', protect, authorize('farmer'), getFarmerReports);
+router.get('/settings', protect, authorize('farmer'), getFarmerSettings);
+router.put('/settings', protect, authorize('farmer'), updateFarmerSettings);
+router.get('/experts', protect, authorize('farmer'), getFarmerExperts);
+
+// Message/conversation routes for farmers
+router.get('/conversations', protect, authorize('farmer'), async (req, res) => {
+  // Delegate to message controller
+  const { getConversations } = require('../controllers/messageController');
+  getConversations(req, res);
+});
+
+router.get('/messages/unread-count', protect, authorize('farmer'), async (req, res) => {
+  // Delegate to message controller
+  const { getUnreadCount } = require('../controllers/messageController');
+  getUnreadCount(req, res);
+});
+
+// Wallet endpoints for farmers (delegate to wallet controller)
+router.get('/wallet/balance', protect, authorize('farmer'), async (req, res) => {
+  const { getWalletBalance } = require('../controllers/walletController');
+  getWalletBalance(req, res);
+});
+
+router.get('/wallet/transactions', protect, authorize('farmer'), async (req, res) => {
+  const { getWalletTransactions } = require('../controllers/walletController');
+  getWalletTransactions(req, res);
+});
+
+// Visit management endpoints for farmers
+router.get('/visits', protect, authorize('farmer'), async (req, res) => {
+  const { getFarmVisits } = require('../controllers/visitController');
+  getFarmVisits(req, res);
+});
+
+router.get('/visits/stats', protect, authorize('farmer'), async (req, res) => {
+  const { getVisitStats } = require('../controllers/visitController');
+  getVisitStats(req, res);
+});
+
+router.get('/availability', protect, authorize('farmer'), async (req, res) => {
+  const { getAvailability } = require('../controllers/visitController');
+  getAvailability(req, res);
+});
+
+router.post('/availability', protect, authorize('farmer'), async (req, res) => {
+  const { setFarmerAvailability } = require('../controllers/visitController');
+  setFarmerAvailability(req, res);
+});
+
+// Settings and account management routes
+router.get('/settings', protect, authorize('farmer'), getFarmerSettings);
+router.put('/settings', protect, authorize('farmer'), updateFarmerSettings);
+router.put('/change-password', protect, authorize('farmer'), changeFarmerPassword);
+
+// Admin cleanup route
+router.post('/cleanup-profiles', protect, authorize('admin'), async (req, res) => {
+  try {
+    const result = await cleanupFarmerProfiles();
+    res.json({
+      success: result.success,
+      message: result.success ? `Cleaned up ${result.updated} profiles` : 'Cleanup failed',
+      data: result
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: 'Server error during cleanup',
+      error: error.message
+    });
+  }
+});
 
 // Media upload routes
 router.post('/images', protect, authorize('farmer'), upload.array('images', 10), uploadFarmImages);

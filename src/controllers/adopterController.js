@@ -3,6 +3,8 @@ const FarmerProfile = require('../models/FarmerProfile');
 const Adoption = require('../models/Adoption');
 const Payment = require('../models/Payment');
 const FarmVisit = require('../models/FarmVisit');
+const ExpertMentorship = require('../models/ExpertMentorship');
+const Message = require('../models/Message');
 
 // @desc    Get adopter dashboard
 // @route   GET /api/adopters/dashboard
@@ -337,6 +339,213 @@ const getInvestmentAnalytics = async (req, res) => {
   }
 };
 
+// @desc    Get farmers that the adopter is mentoring
+// @route   GET /api/adopters/mentoring
+// @access  Private (Adopter only)
+const getMentoringFarmers = async (req, res) => {
+  try {
+    const userId = req.user._id;
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10;
+    const skip = (page - 1) * limit;
+
+    // Get all mentorships where this adopter is the mentor
+    const mentorships = await ExpertMentorship.find({ expert: userId })
+      .populate({
+        path: 'farmer',
+        select: 'firstName lastName avatar email',
+        populate: {
+          path: 'farmerProfile',
+          model: 'FarmerProfile',
+          select: 'farmName location farmingType cropTypes verificationStatus'
+        }
+      })
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit);
+
+    const total = await ExpertMentorship.countDocuments({ expert: userId });
+
+    // Get recent messages for each mentorship
+    const mentoringData = await Promise.all(mentorships.map(async (mentorship) => {
+      const conversationId = `${userId}_${mentorship.farmer._id}`;
+      const lastMessage = await Message.findOne({ conversationId })
+        .sort({ createdAt: -1 });
+
+      const unreadCount = await Message.countDocuments({
+        conversationId,
+        recipient: userId,
+        isRead: false
+      });
+
+      return {
+        _id: mentorship._id,
+        farmer: mentorship.farmer,
+        specialization: mentorship.specialization,
+        status: mentorship.status,
+        startDate: mentorship.startDate,
+        goals: mentorship.goals,
+        progressNotes: mentorship.progressNotes,
+        lastMessage,
+        unreadCount,
+        totalSessions: mentorship.sessions?.length || 0,
+        nextSession: mentorship.sessions?.find(s => 
+          s.status === 'scheduled' && new Date(s.scheduledDate) > new Date()
+        ),
+        createdAt: mentorship.createdAt
+      };
+    }));
+
+    res.json({
+      success: true,
+      data: {
+        mentorships: mentoringData,
+        pagination: {
+          page,
+          limit,
+          total,
+          pages: Math.ceil(total / limit)
+        }
+      }
+    });
+  } catch (error) {
+    console.error('Get mentoring farmers error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error'
+    });
+  }
+};
+
+// @desc    Get conversations for adopter mentoring
+// @route   GET /api/adopters/conversations
+// @access  Private (Adopter only)
+const getMentoringConversations = async (req, res) => {
+  try {
+    const userId = req.user._id;
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 20;
+    const skip = (page - 1) * limit;
+
+    // Get all mentorships for this adopter
+    const mentorships = await ExpertMentorship.find({ expert: userId })
+      .populate('farmer', 'firstName lastName avatar');
+
+    const conversations = await Promise.all(mentorships.map(async (mentorship) => {
+      const conversationId = `${userId}_${mentorship.farmer._id}`;
+      
+      const lastMessage = await Message.findOne({ conversationId })
+        .sort({ createdAt: -1 })
+        .populate('sender', 'firstName lastName avatar');
+
+      const unreadCount = await Message.countDocuments({
+        conversationId,
+        recipient: userId,
+        isRead: false
+      });
+
+      return {
+        conversationId,
+        farmer: mentorship.farmer,
+        mentorship: {
+          _id: mentorship._id,
+          specialization: mentorship.specialization,
+          status: mentorship.status
+        },
+        lastMessage,
+        unreadCount,
+        updatedAt: lastMessage?.createdAt || mentorship.createdAt
+      };
+    }));
+
+    // Sort by last message date
+    conversations.sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
+
+    // Apply pagination
+    const paginatedConversations = conversations.slice(skip, skip + limit);
+
+    res.json({
+      success: true,
+      data: {
+        conversations: paginatedConversations,
+        pagination: {
+          page,
+          limit,
+          total: conversations.length,
+          pages: Math.ceil(conversations.length / limit)
+        }
+      }
+    });
+  } catch (error) {
+    console.error('Get mentoring conversations error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error'
+    });
+  }
+};
+
+// @desc    Create mentorship with farmer
+// @route   POST /api/adopters/mentoring
+// @access  Private (Adopter only)
+const createMentorship = async (req, res) => {
+  try {
+    const { farmerId, specialization, goals, sessionFrequency, paymentTerms } = req.body;
+    const adopterId = req.user._id;
+
+    // Check if mentorship already exists
+    const existingMentorship = await ExpertMentorship.findOne({
+      expert: adopterId,
+      farmer: farmerId,
+      status: { $in: ['active', 'pending'] }
+    });
+
+    if (existingMentorship) {
+      return res.status(400).json({
+        success: false,
+        message: 'Active mentorship with this farmer already exists'
+      });
+    }
+
+    // Verify farmer exists
+    const farmer = await FarmerProfile.findOne({ user: farmerId });
+    if (!farmer) {
+      return res.status(404).json({
+        success: false,
+        message: 'Farmer not found'
+      });
+    }
+
+    const mentorship = new ExpertMentorship({
+      expert: adopterId,
+      farmer: farmerId,
+      specialization,
+      goals: goals || [],
+      sessionFrequency,
+      paymentTerms,
+      status: 'pending',
+      startDate: new Date()
+    });
+
+    await mentorship.save();
+
+    const populatedMentorship = await ExpertMentorship.findById(mentorship._id)
+      .populate('expert', 'firstName lastName avatar')
+      .populate('farmer', 'firstName lastName avatar');
+
+    res.status(201).json({
+      success: true,
+      data: { mentorship: populatedMentorship }
+    });
+  } catch (error) {
+    console.error('Create mentorship error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error'
+    });
+  }
+};
+
 module.exports = {
   getAdopterDashboard,
   updateAdopterProfile,
@@ -344,5 +553,8 @@ module.exports = {
   adoptFarmer,
   getPaymentHistory,
   getVisits,
-  getInvestmentAnalytics
+  getInvestmentAnalytics,
+  getMentoringFarmers,
+  getMentoringConversations,
+  createMentorship
 };

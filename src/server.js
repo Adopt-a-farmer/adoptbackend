@@ -13,6 +13,7 @@ const authRoutes = require('./routes/auth');
 const userRoutes = require('./routes/users');
 const farmerRoutes = require('./routes/farmers');
 const adopterRoutes = require('./routes/adopters');
+const expertRoutes = require('./routes/experts');
 const paymentRoutes = require('./routes/payments');
 const uploadRoutes = require('./routes/upload');
 const messageRoutes = require('./routes/messages');
@@ -42,13 +43,10 @@ const limiter = rateLimit({
 // Middleware
 app.use(helmet());
 app.use(cors({
-  origin: [
-    process.env.FRONTEND_URL || 'http://localhost:5173',
-    'http://localhost:8080',
-    'http://localhost:3000',
-    'http://localhost:5174'
-  ],
-  credentials: true
+  origin: '*', // Allow all origins
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'x-access-token']
 }));
 app.use(limiter);
 app.use(express.json({ limit: '10mb' }));
@@ -69,6 +67,7 @@ app.use('/api/auth', authRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/farmers', farmerRoutes);
 app.use('/api/adopters', adopterRoutes);
+app.use('/api/experts', expertRoutes);
 app.use('/api/payments', paymentRoutes);
 app.use('/api/upload', uploadRoutes);
 app.use('/api/messages', messageRoutes);

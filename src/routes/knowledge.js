@@ -7,9 +7,13 @@ const {
   toggleArticleLike,
   getFarmingCalendar,
   createCalendarEntry,
-  getFarmingVideos
+  getFarmingVideos,
+  getKnowledgeStats
 } = require('../controllers/knowledgeController');
 const { protect, authorize } = require('../middleware/auth');
+
+// Knowledge Hub stats
+router.get('/stats', getKnowledgeStats);
 
 // Knowledge Articles routes
 router.get('/articles', getKnowledgeArticles);

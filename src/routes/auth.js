@@ -16,6 +16,8 @@ const {
   validatePasswordChange,
   validate
 } = require('../middleware/validation');
+const { debugExpertUsers, fixUserRole } = require('../utils/debugExpertUsers');
+const { debugSpecificUser } = require('../utils/debugUserRole');
 
 const router = express.Router();
 
@@ -38,6 +40,79 @@ router.post('/refresh', refreshToken);
 
 // Protected routes
 router.get('/me', protect, getMe);
+router.get('/debug', protect, (req, res) => {
+  console.log('🔍 Debug endpoint called');
+  console.log('User data:', {
+    id: req.user._id,
+    email: req.user.email,
+    role: req.user.role,
+    firstName: req.user.firstName,
+    lastName: req.user.lastName,
+    isActive: req.user.isActive,
+    createdAt: req.user.createdAt
+  });
+  
+  res.json({
+    success: true,
+    data: {
+      user: {
+        id: req.user._id,
+        email: req.user.email,
+        role: req.user.role,
+        firstName: req.user.firstName,
+        lastName: req.user.lastName,
+        isActive: req.user.isActive,
+        createdAt: req.user.createdAt
+      },
+      isExpert: req.user.role === 'expert',
+      canAccessExpertRoutes: ['expert'].includes(req.user.role)
+    }
+  });
+});
+
+// Debug routes for development
+router.get('/debug-experts', async (req, res) => {
+  try {
+    const result = await debugExpertUsers();
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+router.post('/fix-user-role', async (req, res) => {
+  try {
+    const { email, role } = req.body;
+    if (!email || !role) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Email and role are required' 
+      });
+    }
+    
+    const result = await fixUserRole(email, role);
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+router.get('/debug-user/:userId', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    console.log(`🔍 Debugging specific user: ${userId}`);
+    
+    const result = await debugSpecificUser(userId);
+    res.json({
+      success: true,
+      data: result
+    });
+  } catch (error) {
+    console.error('❌ Error in debug-user route:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
 router.put('/me', protect, updateProfile);
 router.post('/logout', protect, logout);
 router.put('/change-password', protect, validatePasswordChange, validate, changePassword);

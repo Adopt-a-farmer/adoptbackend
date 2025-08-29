@@ -16,7 +16,14 @@ const farmerProfileSchema = new mongoose.Schema({
   description: {
     type: String,
     required: [true, 'Farm description is required'],
-    maxlength: [1000, 'Description cannot be more than 1000 characters']
+    maxlength: [1000, 'Description cannot be more than 1000 characters'],
+    validate: {
+      validator: function(v) {
+        // Reject default values
+        return v !== 'New farmer profile - please update your information';
+      },
+      message: 'Please provide a custom description for your farm'
+    }
   },
   establishedYear: {
     type: Number,
@@ -37,11 +44,23 @@ const farmerProfileSchema = new mongoose.Schema({
   location: {
     county: {
       type: String,
-      required: [true, 'County is required']
+      required: [true, 'County is required'],
+      validate: {
+        validator: function(v) {
+          return v && v.trim() !== '' && v !== 'Default County';
+        },
+        message: 'Please provide a valid county name'
+      }
     },
     subCounty: {
       type: String,
-      required: [true, 'Sub-county is required']
+      required: [true, 'Sub-county is required'],
+      validate: {
+        validator: function(v) {
+          return v && v.trim() !== '' && v !== 'Default Sub-County';
+        },
+        message: 'Please provide a valid sub-county name'
+      }
     },
     village: String,
     coordinates: {
@@ -85,7 +104,7 @@ const farmerProfileSchema = new mongoose.Schema({
     yieldUnit: String
   }],
   livestock: [{
-    type: String,
+    animalType: String,
     breed: String,
     count: Number,
     purpose: String // dairy, meat, eggs, etc.

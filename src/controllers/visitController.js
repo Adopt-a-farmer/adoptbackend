@@ -14,7 +14,7 @@ const getFarmVisits = async (req, res) => {
       // Get farmer profile to get visits to their farm
       const farmerProfile = await FarmerProfile.findOne({ user: req.user._id });
       if (farmerProfile) {
-        filter.farmer = farmerProfile._id;
+        filter.farmer = req.user._id; // Use user ID directly for farmer visits
       }
     } else if (req.user.role === 'adopter') {
       filter.adopter = req.user._id;
@@ -27,17 +27,23 @@ const getFarmVisits = async (req, res) => {
     
     if (req.query.date) {
       const date = new Date(req.query.date);
-      filter.scheduledDate = {
+      filter.requestedDate = {
         $gte: new Date(date.setHours(0, 0, 0, 0)),
         $lt: new Date(date.setHours(23, 59, 59, 999))
       };
     }
 
+    // Default to upcoming visits if no status filter
+    if (!req.query.status && req.user.role === 'farmer') {
+      filter.status = { $in: ['requested', 'confirmed'] };
+      filter.requestedDate = { $gte: new Date() };
+    }
+
     const visits = await FarmVisit.find(filter)
       .populate('adopter', 'firstName lastName email phone avatar')
-      .populate('farmer', 'farmName location contactInfo user')
-      .populate('farmer.user', 'firstName lastName')
-      .sort({ scheduledDate: 1 });
+      .populate('farmer', 'firstName lastName email phone')
+      .populate('adoption', 'status duration')
+      .sort({ requestedDate: 1 });
 
     res.json({
       success: true,
@@ -108,10 +114,10 @@ const scheduleFarmVisit = async (req, res) => {
       });
     }
 
-    const { farmerId, scheduledDate, duration, purpose, notes, visitors } = req.body;
+    const { farmerId, requestedDate, duration, purpose, notes, groupSize } = req.body;
 
-    // Validate farmer exists
-    const farmer = await FarmerProfile.findById(farmerId);
+    // Validate farmer exists - farmerId should be the user ID, not profile ID
+    const farmer = await FarmerProfile.findOne({ user: farmerId });
     if (!farmer) {
       return res.status(404).json({
         success: false,
@@ -121,27 +127,33 @@ const scheduleFarmVisit = async (req, res) => {
 
     // Check for scheduling conflicts
     const conflictingVisit = await FarmVisit.findOne({
-      farmer: farmerId,
-      scheduledDate: new Date(scheduledDate),
-      status: { $in: ['pending', 'confirmed'] }
+      farmer: farmerId, // Use farmer user ID
+      requestedDate: {
+        $gte: new Date(new Date(requestedDate).setHours(0, 0, 0, 0)),
+        $lt: new Date(new Date(requestedDate).setHours(23, 59, 59, 999))
+      },
+      status: { $in: ['requested', 'confirmed'] }
     });
 
     if (conflictingVisit) {
       return res.status(400).json({
         success: false,
-        message: 'This time slot is already booked'
+        message: 'This date already has a visit scheduled'
       });
     }
 
     const visitData = {
       adopter: req.user._id,
-      farmer: farmerId,
-      scheduledDate: new Date(scheduledDate),
-      duration: duration || 2, // Default 2 hours
-      purpose: purpose || 'general_visit',
+      farmer: farmerId, // Use farmer user ID
+      requestedDate: new Date(requestedDate),
+      duration: duration || 'half_day',
+      purpose: purpose || 'general',
       notes,
-      visitors: visitors || 1,
-      status: 'pending'
+      groupSize: {
+        adults: groupSize?.adults || 1,
+        children: groupSize?.children || 0
+      },
+      status: 'requested'
     };
 
     const visit = await FarmVisit.create(visitData);
@@ -149,8 +161,7 @@ const scheduleFarmVisit = async (req, res) => {
     // Populate the created visit
     await visit.populate([
       { path: 'adopter', select: 'firstName lastName email phone' },
-      { path: 'farmer', select: 'farmName location contactInfo user', 
-        populate: { path: 'user', select: 'firstName lastName' } }
+      { path: 'farmer', select: 'firstName lastName email phone' }
     ]);
 
     res.status(201).json({
@@ -175,8 +186,7 @@ const updateVisitStatus = async (req, res) => {
     const { status, reason } = req.body;
     const visitId = req.params.id;
 
-    const visit = await FarmVisit.findById(visitId)
-      .populate('farmer', 'user');
+    const visit = await FarmVisit.findById(visitId);
 
     if (!visit) {
       return res.status(404).json({
@@ -188,7 +198,8 @@ const updateVisitStatus = async (req, res) => {
     // Check if user can update this visit
     const canUpdate = 
       req.user.role === 'admin' ||
-      (req.user.role === 'farmer' && visit.farmer.user.toString() === req.user._id.toString());
+      (req.user.role === 'farmer' && visit.farmer.toString() === req.user._id.toString()) ||
+      (req.user.role === 'adopter' && visit.adopter.toString() === req.user._id.toString());
 
     if (!canUpdate) {
       return res.status(403).json({
@@ -200,12 +211,25 @@ const updateVisitStatus = async (req, res) => {
     visit.status = status;
     if (status === 'cancelled' && reason) {
       visit.cancellationReason = reason;
+      visit.cancelledAt = new Date();
     }
     if (status === 'confirmed') {
-      visit.confirmedAt = new Date();
+      visit.confirmedDate = new Date();
+    }
+    if (status === 'completed') {
+      if (!visit.visitReport) {
+        visit.visitReport = {};
+      }
+      visit.visitReport.completedAt = new Date();
     }
 
     await visit.save();
+
+    // Populate for response
+    await visit.populate([
+      { path: 'adopter', select: 'firstName lastName email phone' },
+      { path: 'farmer', select: 'firstName lastName email phone' }
+    ]);
 
     res.json({
       success: true,
@@ -293,7 +317,8 @@ const getFarmerAvailability = async (req, res) => {
       });
     }
 
-    const farmer = await FarmerProfile.findById(farmerId);
+    // Find farmer by user ID
+    const farmer = await FarmerProfile.findOne({ user: farmerId });
     if (!farmer) {
       return res.status(404).json({
         success: false,
@@ -302,55 +327,69 @@ const getFarmerAvailability = async (req, res) => {
     }
 
     const targetDate = new Date(date);
-    const startOfDay = new Date(targetDate.setHours(0, 0, 0, 0));
-    const endOfDay = new Date(targetDate.setHours(23, 59, 59, 999));
+    const isoDate = targetDate.toISOString().slice(0, 10);
+
+    // Get farmer's set availability for this date
+    const availability = await FarmerAvailability.findOne({
+      farmer: farmer._id,
+      date: isoDate
+    });
 
     // Get existing bookings for the date
     const existingVisits = await FarmVisit.find({
-      farmer: farmerId,
-      scheduledDate: {
-        $gte: startOfDay,
-        $lte: endOfDay
+      farmer: farmerId, // Use farmer user ID
+      requestedDate: {
+        $gte: new Date(targetDate.setHours(0, 0, 0, 0)),
+        $lte: new Date(targetDate.setHours(23, 59, 59, 999))
       },
-      status: { $in: ['pending', 'confirmed'] }
-    }).select('scheduledDate duration');
+      status: { $in: ['requested', 'confirmed'] }
+    }).select('requestedDate duration');
 
-    // Generate available time slots (assuming 8 AM to 6 PM working hours)
-    const availableSlots = [];
-    const workingHours = [8, 9, 10, 11, 13, 14, 15, 16, 17]; // Skip 12 PM for lunch
+    let availableSlots = [];
 
-    workingHours.forEach(hour => {
-      const slotTime = new Date(targetDate);
-      slotTime.setHours(hour, 0, 0, 0);
+    if (availability && availability.timeSlots.length > 0) {
+      // Use farmer's custom availability
+      availableSlots = availability.timeSlots
+        .filter(slot => {
+          // Check if this slot conflicts with existing visits
+          const hasConflict = existingVisits.some(visit => {
+            const visitHour = new Date(visit.requestedDate).getHours();
+            const slotHour = parseInt(slot.split(':')[0]);
+            return Math.abs(visitHour - slotHour) < 2; // 2-hour buffer
+          });
+          return !hasConflict;
+        })
+        .map(slot => ({
+          time: slot,
+          formattedTime: slot,
+          available: true
+        }));
+    } else {
+      // Default working hours if no custom availability
+      const workingHours = [8, 9, 10, 11, 13, 14, 15, 16, 17];
       
-      // Check if this slot conflicts with existing visits
-      const hasConflict = existingVisits.some(visit => {
-        const visitStart = new Date(visit.scheduledDate);
-        const visitEnd = new Date(visitStart.getTime() + (visit.duration * 60 * 60 * 1000));
-        const slotEnd = new Date(slotTime.getTime() + (2 * 60 * 60 * 1000)); // Assume 2-hour slots
-        
-        return (slotTime >= visitStart && slotTime < visitEnd) ||
-               (slotEnd > visitStart && slotEnd <= visitEnd);
-      });
-
-      if (!hasConflict) {
-        availableSlots.push({
-          time: slotTime,
-          formattedTime: slotTime.toLocaleTimeString('en-US', { 
-            hour: 'numeric', 
-            minute: '2-digit',
-            hour12: true 
-          })
-        });
-      }
-    });
+      availableSlots = workingHours
+        .filter(hour => {
+          const hasConflict = existingVisits.some(visit => {
+            const visitHour = new Date(visit.requestedDate).getHours();
+            return Math.abs(visitHour - hour) < 2;
+          });
+          return !hasConflict;
+        })
+        .map(hour => ({
+          time: `${hour.toString().padStart(2, '0')}:00`,
+          formattedTime: `${hour}:00`,
+          available: true
+        }));
+    }
 
     res.json({
       success: true,
       data: {
-        date: targetDate.toDateString(),
+        date: isoDate,
         availableSlots,
-        bookedSlots: existingVisits.length
+        bookedSlots: existingVisits.length,
+        hasCustomAvailability: !!(availability && availability.timeSlots.length > 0)
       }
     });
   } catch (error) {
@@ -371,11 +410,8 @@ const getVisitStats = async (req, res) => {
     
     let filter = {};
     if (req.user.role === 'farmer') {
-      // Get farmer profile
-      const farmerProfile = await FarmerProfile.findOne({ user: userId });
-      if (farmerProfile) {
-        filter.farmer = farmerProfile._id;
-      }
+      // Use user ID directly for farmer visits
+      filter.farmer = userId;
     } else if (req.user.role === 'adopter') {
       filter.adopter = userId;
     }
@@ -388,6 +424,9 @@ const getVisitStats = async (req, res) => {
     const pendingRequests = visits.filter(v => v.status === 'requested').length;
     const completedVisits = visits.filter(v => v.status === 'completed').length;
     const confirmedVisits = visits.filter(v => v.status === 'confirmed').length;
+    const upcomingVisits = visits.filter(v => 
+      v.status === 'confirmed' && new Date(v.requestedDate) > new Date()
+    ).length;
     
     // Calculate average rating from completed visits with feedback
     const ratedVisits = visits.filter(v => 
@@ -423,6 +462,7 @@ const getVisitStats = async (req, res) => {
         pending_requests: pendingRequests,
         completed_visits: completedVisits,
         confirmed_visits: confirmedVisits,
+        upcoming_visits: upcomingVisits,
         average_rating: parseFloat(averageRating.toFixed(1)),
         total_revenue: totalRevenue,
         this_month_visits: thisMonthVisits
@@ -457,22 +497,61 @@ async function setFarmerAvailability(req, res) {
     const userId = req.user._id;
     const { date, time_slots } = req.body;
 
-    if (!date || !Array.isArray(time_slots) || time_slots.length === 0) {
-      return res.status(400).json({ success: false, message: 'date and time_slots are required' });
+    if (!date) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Date is required' 
+      });
+    }
+
+    if (!Array.isArray(time_slots)) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'time_slots must be an array' 
+      });
     }
 
     const farmer = await FarmerProfile.findOne({ user: userId });
     if (!farmer) {
-      return res.status(404).json({ success: false, message: 'Farmer profile not found' });
+      return res.status(404).json({ 
+        success: false, 
+        message: 'Farmer profile not found' 
+      });
     }
 
     const normalizedDate = new Date(date);
     if (isNaN(normalizedDate.getTime())) {
-      return res.status(400).json({ success: false, message: 'Invalid date format' });
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Invalid date format' 
+      });
     }
+    
+    // Ensure date is not in the past
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    if (normalizedDate < today) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Cannot set availability for past dates' 
+      });
+    }
+
     const isoDate = normalizedDate.toISOString().slice(0, 10);
 
-    const uniqueSlots = [...new Set(time_slots)];
+    // Validate time slots format
+    const validTimeSlots = time_slots.filter(slot => {
+      return typeof slot === 'string' && /^\d{2}:\d{2}$/.test(slot);
+    });
+
+    if (validTimeSlots.length !== time_slots.length) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'All time slots must be in HH:mm format' 
+      });
+    }
+
+    const uniqueSlots = [...new Set(validTimeSlots)];
 
     const availability = await FarmerAvailability.findOneAndUpdate(
       { farmer: farmer._id, date: isoDate },
@@ -480,10 +559,17 @@ async function setFarmerAvailability(req, res) {
       { upsert: true, new: true }
     );
 
-    return res.json({ success: true, message: 'Availability updated', data: { availability } });
+    return res.json({ 
+      success: true, 
+      message: `Availability ${uniqueSlots.length > 0 ? 'updated' : 'cleared'} for ${isoDate}`, 
+      data: { availability } 
+    });
   } catch (error) {
     console.error('Set farmer availability error:', error);
-    return res.status(500).json({ success: false, message: 'Server error' });
+    return res.status(500).json({ 
+      success: false, 
+      message: 'Server error' 
+    });
   }
 }
 
@@ -495,23 +581,75 @@ async function getAvailability(req, res) {
     const userId = req.user._id;
     const farmer = await FarmerProfile.findOne({ user: userId });
     if (!farmer) {
-      return res.status(404).json({ success: false, message: 'Farmer profile not found' });
+      return res.status(404).json({ 
+        success: false, 
+        message: 'Farmer profile not found' 
+      });
     }
 
-    const { start, end } = req.query;
+    const { start, end, date } = req.query;
     const filter = { farmer: farmer._id };
-    if (start && end) {
-      filter.date = { $gte: start, $lte: end };
-    } else if (start) {
-      filter.date = { $gte: start };
-    } else if (end) {
-      filter.date = { $lte: end };
+    
+    // Handle single date query
+    if (date) {
+      const queryDate = new Date(date);
+      if (isNaN(queryDate.getTime())) {
+        return res.status(400).json({ 
+          success: false, 
+          message: 'Invalid date format' 
+        });
+      }
+      filter.date = queryDate.toISOString().slice(0, 10);
+    } else {
+      // Handle date range query
+      if (start && end) {
+        const startDate = new Date(start);
+        const endDate = new Date(end);
+        if (isNaN(startDate.getTime()) || isNaN(endDate.getTime())) {
+          return res.status(400).json({ 
+            success: false, 
+            message: 'Invalid date format in start or end parameter' 
+          });
+        }
+        filter.date = { 
+          $gte: startDate.toISOString().slice(0, 10), 
+          $lte: endDate.toISOString().slice(0, 10) 
+        };
+      } else if (start) {
+        const startDate = new Date(start);
+        if (isNaN(startDate.getTime())) {
+          return res.status(400).json({ 
+            success: false, 
+            message: 'Invalid start date format' 
+          });
+        }
+        filter.date = { $gte: startDate.toISOString().slice(0, 10) };
+      } else if (end) {
+        const endDate = new Date(end);
+        if (isNaN(endDate.getTime())) {
+          return res.status(400).json({ 
+            success: false, 
+            message: 'Invalid end date format' 
+          });
+        }
+        filter.date = { $lte: endDate.toISOString().slice(0, 10) };
+      }
     }
 
     const items = await FarmerAvailability.find(filter).sort({ date: 1 });
-    return res.json({ success: true, data: { availability: items } });
+    
+    return res.json({ 
+      success: true, 
+      data: { 
+        availability: items,
+        count: items.length
+      } 
+    });
   } catch (error) {
     console.error('Get availability error:', error);
-    return res.status(500).json({ success: false, message: 'Server error' });
+    return res.status(500).json({ 
+      success: false, 
+      message: 'Server error' 
+    });
   }
 }

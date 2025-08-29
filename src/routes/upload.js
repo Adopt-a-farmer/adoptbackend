@@ -48,6 +48,7 @@ const upload = multer({
 router.use(protect);
 
 // Image upload routes
+router.post('/single', upload.single('image'), uploadSingleImage); // Add the missing /single route
 router.post('/image', upload.single('image'), uploadSingleImage);
 router.post('/images', upload.array('images', 10), uploadMultipleImages);
 

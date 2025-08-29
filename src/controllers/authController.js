@@ -1,6 +1,7 @@
 const User = require('../models/User');
 const FarmerProfile = require('../models/FarmerProfile');
 const AdopterProfile = require('../models/AdopterProfile');
+const ExpertProfile = require('../models/ExpertProfile');
 const { generateToken, generateRefreshToken, verifyRefreshToken } = require('../utils/tokenUtils');
 
 // @desc    Register user
@@ -10,9 +11,18 @@ const register = async (req, res) => {
   try {
     const { firstName, lastName, email, password, role, phone } = req.body;
 
+    console.log('🚀 Registration attempt:', {
+      email,
+      role,
+      firstName,
+      lastName,
+      phone: phone || 'not provided'
+    });
+
     // Check if user exists
     const userExists = await User.findOne({ email });
     if (userExists) {
+      console.log('❌ Registration failed: User already exists:', email);
       return res.status(400).json({
         success: false,
         message: 'User already exists with this email'
@@ -29,22 +39,34 @@ const register = async (req, res) => {
       phone
     });
 
+    console.log('✅ User created successfully:', {
+      id: user._id,
+      email: user.email,
+      role: user.role
+    });
+
     // Create role-specific profile
     if (role === 'farmer') {
       await FarmerProfile.create({
         user: user._id,
         farmName: `${firstName} ${lastName}'s Farm`,
-        description: 'New farmer profile - please update your information',
+        description: '',
         location: {
-          county: 'Default County',
-          subCounty: 'Default Sub-County'
+          county: '',
+          subCounty: ''
         },
         farmSize: {
-          value: 1,
+          value: 0.1,
           unit: 'acres'
         },
-        farmingType: ['crop']
+        farmingType: ['crop'],
+        cropTypes: [],
+        farmingMethods: [],
+        crops: [],
+        livestock: [],
+        certifications: []
       });
+      console.log('✅ FarmerProfile created for user:', user._id);
     } else if (role === 'adopter') {
       await AdopterProfile.create({
         user: user._id,
@@ -56,6 +78,38 @@ const register = async (req, res) => {
           farmingTypes: ['crop']
         }
       });
+      console.log('✅ AdopterProfile created for user:', user._id);
+    } else if (role === 'expert') {
+      const expertProfile = await ExpertProfile.create({
+        user: user._id,
+        bio: '',
+        specializations: [],
+        experience: {
+          yearsOfExperience: 0,
+          education: [],
+          certifications: [],
+          previousWork: []
+        },
+        contact: {
+          phone: phone || ''
+        },
+        availability: {
+          isAvailable: true,
+          maxMentorships: 10,
+          workingHours: {
+            start: '08:00',
+            end: '17:00'
+          },
+          workingDays: ['monday', 'tuesday', 'wednesday', 'thursday', 'friday'],
+          consultationTypes: ['remote', 'phone', 'video_call']
+        },
+        location: {
+          county: '',
+          subCounty: '',
+          serviceRadius: 50
+        }
+      });
+      console.log('✅ ExpertProfile created for user:', user._id, 'Profile ID:', expertProfile._id);
     }
 
     // Generate token
@@ -65,6 +119,8 @@ const register = async (req, res) => {
     // Update last login
     user.lastLogin = new Date();
     await user.save();
+
+    console.log('✅ Registration completed successfully for:', email);
 
     res.status(201).json({
       success: true,
@@ -84,7 +140,7 @@ const register = async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('Registration error:', error);
+    console.error('❌ Registration error:', error);
     res.status(500).json({
       success: false,
       message: 'Server error during registration'
@@ -99,17 +155,28 @@ const login = async (req, res) => {
   try {
     const { email, password } = req.body;
 
+    console.log('🔐 Login attempt for:', email);
+
     // Check if user exists and get password
     const user = await User.findOne({ email }).select('+password');
     if (!user) {
+      console.log('❌ Login failed: User not found:', email);
       return res.status(401).json({
         success: false,
         message: 'Invalid credentials'
       });
     }
 
+    console.log('👤 User found:', {
+      id: user._id,
+      email: user.email,
+      role: user.role,
+      isActive: user.isActive
+    });
+
     // Check if user is active
     if (!user.isActive) {
+      console.log('❌ Login failed: User account deactivated:', email);
       return res.status(401).json({
         success: false,
         message: 'Account is deactivated. Please contact support.'
@@ -119,11 +186,14 @@ const login = async (req, res) => {
     // Check password
     const isMatch = await user.matchPassword(password);
     if (!isMatch) {
+      console.log('❌ Login failed: Invalid password for:', email);
       return res.status(401).json({
         success: false,
         message: 'Invalid credentials'
       });
     }
+
+    console.log('✅ Password verified for:', email);
 
     // Generate tokens
     const token = generateToken(user._id);
@@ -132,6 +202,8 @@ const login = async (req, res) => {
     // Update last login
     user.lastLogin = new Date();
     await user.save();
+
+    console.log('✅ Login successful for:', email, 'Role:', user.role);
 
     res.json({
       success: true,
@@ -143,6 +215,7 @@ const login = async (req, res) => {
           lastName: user.lastName,
           email: user.email,
           role: user.role,
+          phone: user.phone,
           isVerified: user.isVerified,
           avatar: user.avatar,
           lastLogin: user.lastLogin
@@ -152,7 +225,7 @@ const login = async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('Login error:', error);
+    console.error('❌ Login error:', error);
     res.status(500).json({
       success: false,
       message: 'Server error during login'
@@ -173,6 +246,41 @@ const getMe = async (req, res) => {
       profile = await FarmerProfile.findOne({ user: user._id });
     } else if (user.role === 'adopter') {
       profile = await AdopterProfile.findOne({ user: user._id });
+    } else if (user.role === 'expert') {
+      profile = await ExpertProfile.findOne({ user: user._id });
+      
+      // Create expert profile if it doesn't exist (for existing users)
+      if (!profile) {
+        profile = await ExpertProfile.create({
+          user: user._id,
+          bio: '',
+          specializations: [],
+          experience: {
+            yearsOfExperience: 0,
+            education: [],
+            certifications: [],
+            previousWork: []
+          },
+          contact: {
+            phone: user.phone || ''
+          },
+          availability: {
+            isAvailable: true,
+            maxMentorships: 10,
+            workingHours: {
+              start: '08:00',
+              end: '17:00'
+            },
+            workingDays: ['monday', 'tuesday', 'wednesday', 'thursday', 'friday'],
+            consultationTypes: ['remote', 'phone', 'video_call']
+          },
+          location: {
+            county: '',
+            subCounty: '',
+            serviceRadius: 50
+          }
+        });
+      }
     }
 
     res.json({
@@ -180,6 +288,7 @@ const getMe = async (req, res) => {
       data: {
         user: {
           id: user._id,
+          _id: user._id,
           firstName: user.firstName,
           lastName: user.lastName,
           fullName: user.fullName,

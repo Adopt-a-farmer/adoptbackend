@@ -83,7 +83,7 @@ const sampleFarmers = [
       farmingType: ['livestock'],
       livestock: [
         {
-          type: 'Cattle',
+          animalType: 'Cattle',
           breed: 'Holstein-Friesian',
           count: 15,
           purpose: 'dairy'
@@ -142,13 +142,13 @@ const sampleFarmers = [
       ],
       livestock: [
         {
-          type: 'Poultry',
+          animalType: 'Poultry',
           breed: 'Kienyeji',
           count: 50,
           purpose: 'eggs and meat'
         },
         {
-          type: 'Goats',
+          animalType: 'Goats',
           breed: 'Galla',
           count: 20,
           purpose: 'meat and milk'
@@ -170,7 +170,7 @@ const seedFarmers = async () => {
     console.log('🌱 Starting farmer seeding process...');
     
     // Connect to MongoDB
-    await mongoose.connect(process.env.MONGODB_URI);
+    await mongoose.connect(process.env.MONGO_URI);
     console.log('✅ Connected to MongoDB');
 
     // Clear existing farmers and users

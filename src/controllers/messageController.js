@@ -1,5 +1,8 @@
 const Message = require('../models/Message');
 const User = require('../models/User');
+const { uploadImage, deleteFile } = require('../utils/cloudinaryUtils');
+const multer = require('multer');
+const path = require('path');
 
 // @desc    Get messages for a conversation
 // @route   GET /api/messages/:conversationId
@@ -196,9 +199,32 @@ const getConversations = async (req, res) => {
       })
     );
 
+    // Convert to consistent format
+    const formattedConversations = populatedConversations.map(conv => {
+      return {
+        id: conv.conversationId,
+        conversationId: conv.conversationId,
+        participant_id: parseInt(conv.otherUser._id),
+        participant_name: `${conv.otherUser.firstName} ${conv.otherUser.lastName}`,
+        participant_image: conv.otherUser.avatar || '',
+        participant_role: conv.otherUser.role,
+        last_message: conv.lastMessage.content?.text || 'File',
+        last_message_at: conv.lastMessage.createdAt,
+        unread_count: conv.unreadCount,
+        status: 'active',
+        participant_details: {
+          email: conv.otherUser.email,
+          role: conv.otherUser.role
+        }
+      };
+    });
+
     res.json({
       success: true,
-      data: { conversations: populatedConversations }
+      data: { 
+        conversations: formattedConversations,
+        totalUnread: formattedConversations.reduce((total, conv) => total + conv.unread_count, 0)
+      }
     });
   } catch (error) {
     console.error('Get conversations error:', error);
@@ -323,9 +349,102 @@ const getUnreadCount = async (req, res) => {
   }
 };
 
+// @desc    Send a message with file
+// @route   POST /api/messages/send-file
+// @access  Private
+const sendMessageWithFile = async (req, res) => {
+  try {
+    const senderId = req.user._id;
+    const { recipient, messageType } = req.body;
+    const file = req.file;
+
+    if (!file) {
+      return res.status(400).json({
+        success: false,
+        message: 'No file provided'
+      });
+    }
+
+    // Verify recipient exists
+    const recipientUser = await User.findById(recipient);
+    if (!recipientUser || !recipientUser.isActive) {
+      return res.status(404).json({
+        success: false,
+        message: 'Recipient not found'
+      });
+    }
+
+    // Create conversation ID (consistent ordering)
+    const conversationId = [senderId, recipient].sort().join('_');
+
+    let uploadResult;
+    let contentData = {};
+
+    // Upload file to Cloudinary
+    try {
+      if (messageType === 'image' && file.mimetype.startsWith('image/')) {
+        uploadResult = await uploadImage(file.path, 'messages');
+      } else {
+        // For non-image files, upload as raw file
+        uploadResult = await uploadImage(file.path, 'messages', { resource_type: 'raw' });
+      }
+
+      contentData = {
+        media: {
+          url: uploadResult.secure_url,
+          publicId: uploadResult.public_id,
+          fileName: file.originalname,
+          fileSize: file.size,
+          mimeType: file.mimetype
+        }
+      };
+    } catch (uploadError) {
+      console.error('File upload error:', uploadError);
+      return res.status(500).json({
+        success: false,
+        message: 'Failed to upload file'
+      });
+    }
+
+    // Create message
+    const message = await Message.create({
+      sender: senderId,
+      recipient,
+      conversationId,
+      messageType: messageType || 'file',
+      content: contentData
+    });
+
+    // Populate message data
+    const populatedMessage = await Message.findById(message._id)
+      .populate('sender', 'firstName lastName avatar')
+      .populate('recipient', 'firstName lastName avatar');
+
+    // Emit message via Socket.IO
+    const io = req.app.get('io');
+    if (io) {
+      io.to(`user_${recipient}`).emit('new_message', populatedMessage);
+      io.to(`user_${senderId}`).emit('message_sent', populatedMessage);
+    }
+
+    res.status(201).json({
+      success: true,
+      message: 'File message sent successfully',
+      data: { message: populatedMessage }
+    });
+  } catch (error) {
+    console.error('Send file message error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error'
+    });
+  }
+};
+
 module.exports = {
   getMessages,
   sendMessage,
+  sendMessageWithFile,
   getConversations,
   markMessagesAsRead,
   deleteMessage,

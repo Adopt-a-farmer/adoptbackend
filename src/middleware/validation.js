@@ -37,14 +37,12 @@ const validateRegister = [
     .withMessage('Please provide a valid email'),
   
   body('password')
-    .isLength({ min: 6 })
-    .withMessage('Password must be at least 6 characters')
-    .matches(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)/)
-    .withMessage('Password must contain at least one uppercase letter, one lowercase letter, and one number'),
+    .isLength({ min: 1 })
+    .withMessage('Password is required'),
   
   body('role')
-    .isIn(['farmer', 'adopter'])
-    .withMessage('Role must be either farmer or adopter'),
+    .isIn(['farmer', 'adopter', 'expert'])
+    .withMessage('Role must be either farmer, adopter, or expert'),
   
   body('phone')
     .optional()
@@ -91,10 +89,8 @@ const validatePasswordChange = [
     .withMessage('Current password is required'),
   
   body('newPassword')
-    .isLength({ min: 6 })
-    .withMessage('New password must be at least 6 characters')
-    .matches(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)/)
-    .withMessage('New password must contain at least one uppercase letter, one lowercase letter, and one number')
+    .isLength({ min: 1 })
+    .withMessage('New password is required')
 ];
 
 // Farmer profile validation

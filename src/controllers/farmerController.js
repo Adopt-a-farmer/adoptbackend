@@ -3,6 +3,7 @@ const User = require('../models/User');
 const Adoption = require('../models/Adoption');
 const Payment = require('../models/Payment');
 const { uploadImage, uploadVideo, deleteFile } = require('../utils/cloudinaryUtils');
+const FarmerProfileService = require('../services/farmerProfileService');
 
 // @desc    Get all farmers (public browsing)
 // @route   GET /api/farmers
@@ -21,21 +22,48 @@ const getFarmers = async (req, res) => {
     // Build filter object
     const filter = { verificationStatus: 'verified', isActive: true };
     
-    if (req.query.county) {
-      filter['location.county'] = new RegExp(req.query.county, 'i');
+    // Location filter
+    if (req.query.location) {
+      filter['location.county'] = new RegExp(req.query.location, 'i');
     }
     
+    // Farming type filter
     if (req.query.farmingType) {
       filter.farmingType = { $in: [req.query.farmingType] };
     }
     
+    // Crops filter (comma-separated list)
+    if (req.query.crops) {
+      const crops = req.query.crops.split(',').map(crop => crop.trim());
+      filter.cropTypes = { $in: crops.map(crop => new RegExp(crop, 'i')) };
+    }
+    
+    // Verified filter
+    if (req.query.verified === 'true') {
+      filter.verificationStatus = 'verified';
+    }
+    
+    // Farm size range filter
+    if (req.query.minFarmSize || req.query.maxFarmSize) {
+      filter['farmSize.value'] = {};
+      if (req.query.minFarmSize) {
+        filter['farmSize.value'].$gte = parseInt(req.query.minFarmSize);
+      }
+      if (req.query.maxFarmSize) {
+        filter['farmSize.value'].$lte = parseInt(req.query.maxFarmSize);
+      }
+    }
+    
+    // Text search filter
     if (req.query.search) {
       const searchRegex = new RegExp(req.query.search, 'i');
       filter.$or = [
         { farmName: searchRegex },
         { description: searchRegex },
-        { 'crops.name': searchRegex },
-        { 'livestock.type': searchRegex }
+        { bio: searchRegex },
+        { cropTypes: { $in: [searchRegex] } },
+        { 'location.county': searchRegex },
+        { 'location.subCounty': searchRegex }
       ];
     }
 
@@ -43,10 +71,31 @@ const getFarmers = async (req, res) => {
 
     // Sort options
     let sort = { createdAt: -1 }; // Default: newest first
-    if (req.query.sort === 'rating') {
-      sort = { 'rating.average': -1 };
-    } else if (req.query.sort === 'funding') {
-      sort = { 'adoptionStats.totalFunding': -1 };
+    
+    switch (req.query.sortBy) {
+      case 'oldest':
+        sort = { createdAt: 1 };
+        break;
+      case 'verified':
+        sort = { verificationStatus: -1, createdAt: -1 };
+        break;
+      case 'most_adopters':
+        sort = { 'adoptionStats.totalAdopters': -1 };
+        break;
+      case 'highest_earnings':
+        sort = { 'adoptionStats.totalEarnings': -1 };
+        break;
+      case 'farm_size_asc':
+        sort = { 'farmSize.value': 1 };
+        break;
+      case 'farm_size_desc':
+        sort = { 'farmSize.value': -1 };
+        break;
+      case 'alphabetical':
+        sort = { farmName: 1 };
+        break;
+      default:
+        sort = { createdAt: -1 };
     }
 
     console.log('[FARMERS API] Sort criteria:', sort);
@@ -72,6 +121,7 @@ const getFarmers = async (req, res) => {
       success: true,
       data: {
         farmers,
+        total,
         pagination: {
           current: page,
           pages: Math.ceil(total / limit),
@@ -193,104 +243,19 @@ const updateFarmerProfile = async (req, res) => {
     const userId = req.user._id;
     const updateData = req.body || {};
   console.log(`[FARMERS API] ${req.method} /api/farmers/profile by ${userId} - incoming:`, JSON.stringify(updateData));
-  console.log(`[FARMERS API] cropTypes in request:`, updateData.cropTypes);
-  console.log(`[FARMERS API] farmingMethods in request:`, updateData.farmingMethods);
 
-    // Build update object to only include provided fields (supports PATCH)
-  const buildUpdate = (data) => {
-      const update = {};
-      const assign = (path, value) => {
-        if (value === undefined) return;
-        // Avoid setting empty strings for required fields during partial updates
-        if (req.method === 'PATCH' && typeof value === 'string' && value.trim() === '') return;
-        update[path] = value;
-      };
-  const normalizeKey = (v) => String(v).toLowerCase().trim().replace(/\s+/g, '_');
+    // Get current user info
+    const user = req.user;
 
-      assign('farmName', data.farmName);
-      assign('description', data.description);
-      if (data.location) {
-        assign('location.county', data.location.county);
-        assign('location.subCounty', data.location.subCounty);
-        assign('location.village', data.location.village);
-        if (data.location.coordinates) {
-          assign('location.coordinates.latitude', data.location.coordinates.latitude);
-          assign('location.coordinates.longitude', data.location.coordinates.longitude);
-        }
-      }
-      if (data.farmSize) {
-        assign('farmSize.value', data.farmSize.value);
-        if (data.farmSize.unit) assign('farmSize.unit', String(data.farmSize.unit).toLowerCase());
-      }
-      if (data.establishedYear) assign('establishedYear', parseInt(data.establishedYear, 10));
-      if (Array.isArray(data.farmingType)) {
-        assign('farmingType', data.farmingType.map(v => String(v).toLowerCase()));
-      } else if (typeof data.farmingType === 'string') {
-        assign('farmingType', [data.farmingType.toLowerCase()]);
-      }
-      // Contact info
-      if (data.contactInfo) {
-        assign('contactInfo.phone', data.contactInfo.phone);
-        assign('contactInfo.email', data.contactInfo.email);
-        assign('contactInfo.website', data.contactInfo.website);
-      }
-      // Social links
-      if (data.socialMedia) {
-        assign('socialMedia.facebook', data.socialMedia.facebook);
-        assign('socialMedia.twitter', data.socialMedia.twitter);
-        assign('socialMedia.instagram', data.socialMedia.instagram);
-      }
-      // Farming selections
-      // Crop types: accept array of strings, array of objects, string, or boolean map
-      const allowedCrops = new Set(['maize','beans','rice','wheat','vegetables','fruits','coffee','tea','sugarcane','cotton','sunflower','sorghum','millet']);
-      if (data.cropTypes !== undefined) {
-        let values = [];
-        if (Array.isArray(data.cropTypes)) {
-          // ['Maize'] or [{value:'Maize'}]
-          values = data.cropTypes.map(item => {
-            if (typeof item === 'string') return item;
-            if (item && typeof item === 'object') return item.value || item.name || '';
-            return '';
-          });
-        } else if (typeof data.cropTypes === 'object' && data.cropTypes !== null) {
-          // { maize: true, beans: false, ... }
-          values = Object.keys(data.cropTypes).filter(k => !!data.cropTypes[k]);
-        } else if (typeof data.cropTypes === 'string') {
-          values = [data.cropTypes];
-        }
-        const normalized = values.map(v => String(v).toLowerCase().trim()).filter(v => allowedCrops.has(v));
-        if (normalized.length) assign('cropTypes', normalized);
-      }
-      // Farming methods: accept array/string/object map and normalize to enum
-      const allowedMethods = new Set(['organic','conventional','permaculture','hydroponics','agroforestry','conservation_agriculture','precision_farming','sustainable_agriculture']);
-      if (data.farmingMethods !== undefined) {
-        let values = [];
-        if (Array.isArray(data.farmingMethods)) {
-          values = data.farmingMethods.map(item => {
-            if (typeof item === 'string') return item;
-            if (item && typeof item === 'object') return item.value || item.name || '';
-            return '';
-          });
-        } else if (typeof data.farmingMethods === 'object' && data.farmingMethods !== null) {
-          values = Object.keys(data.farmingMethods).filter(k => !!data.farmingMethods[k]);
-        } else if (typeof data.farmingMethods === 'string') {
-          values = [data.farmingMethods];
-        }
-        const normalized = values.map(v => normalizeKey(v)).filter(v => allowedMethods.has(v));
-        if (normalized.length) assign('farmingMethods', normalized);
-      }
-      if (Array.isArray(data.crops)) assign('crops', data.crops);
-      if (Array.isArray(data.livestock)) assign('livestock', data.livestock);
-      if (data.media) assign('media', data.media);
-      if (data.bankDetails) assign('bankDetails', data.bankDetails);
-      return update;
-    };
+    // Use service to validate and clean the data
+    const cleanedData = FarmerProfileService.validateAndCleanProfileData(updateData, user);
+    
+    console.log('[FARMERS API] Cleaned data:', cleanedData);
 
-    const updateOps = buildUpdate(updateData);
-
-  const farmer = await FarmerProfile.findOneAndUpdate(
+    // Update the farmer profile
+    const farmer = await FarmerProfile.findOneAndUpdate(
       { user: userId },
-      { $set: updateOps },
+      { $set: cleanedData },
       { new: true, runValidators: true }
     ).populate('user', 'firstName lastName avatar');
 
@@ -301,13 +266,17 @@ const updateFarmerProfile = async (req, res) => {
       });
     }
 
-  console.log('[FARMERS API] Update ops applied:', updateOps);
-  console.log('[FARMERS API] cropTypes ops:', updateOps.cropTypes);
-  console.log('[FARMERS API] farmingMethods ops:', updateOps.farmingMethods);
-  res.json({
+    // Check completion status
+    const completion = FarmerProfileService.checkProfileCompletion(farmer);
+    
+    console.log('[FARMERS API] Profile updated successfully');
+    res.json({
       success: true,
       message: 'Farmer profile updated successfully',
-      data: { farmer }
+      data: { 
+        farmer,
+        completion 
+      }
     });
   } catch (error) {
     console.error('Update farmer profile error:', error);
@@ -435,6 +404,10 @@ const uploadFarmVideos = async (req, res) => {
 const getFarmerDashboard = async (req, res) => {
   try {
     const userId = req.user._id;
+    const FarmUpdate = require('../models/FarmUpdate');
+    const FarmVisit = require('../models/FarmVisit');
+    const Message = require('../models/Message');
+    const WithdrawalRequest = require('../models/WithdrawalRequest');
 
     // Get farmer profile
     const farmer = await FarmerProfile.findOne({ user: userId })
@@ -458,14 +431,145 @@ const getFarmerDashboard = async (req, res) => {
       status: 'success'
     }).sort({ createdAt: -1 });
 
-    // Calculate statistics
+    // Get farm updates
+    const farmUpdates = await FarmUpdate.find({ farmer: farmer._id })
+      .sort({ createdAt: -1 })
+      .limit(5);
+
+    // Get visits (use user ID since visits reference farmer user, not profile)
+    const visits = await FarmVisit.find({ farmer: userId })
+      .populate('adopter', 'firstName lastName avatar')
+      .sort({ requestedDate: 1 })
+      .limit(10);
+
+    // Get upcoming visits specifically
+    const upcomingVisits = await FarmVisit.find({ 
+      farmer: userId,
+      status: { $in: ['requested', 'confirmed'] },
+      requestedDate: { $gte: new Date() }
+    })
+      .populate('adopter', 'firstName lastName avatar')
+      .sort({ requestedDate: 1 })
+      .limit(5);
+
+    // Get unread messages count
+    const unreadMessages = await Message.countDocuments({
+      recipient: userId,
+      isRead: false
+    });
+
+    // Get wallet balance
+    const totalEarnings = payments.reduce((sum, p) => sum + p.netAmount, 0);
+    const withdrawals = await WithdrawalRequest.find({ farmer: userId });
+    const totalWithdrawn = withdrawals
+      .filter(w => w.status === 'completed')
+      .reduce((sum, w) => sum + w.amount, 0);
+    const pendingWithdrawals = withdrawals
+      .filter(w => w.status === 'pending')
+      .reduce((sum, w) => sum + w.amount, 0);
+    const availableBalance = Math.max(0, totalEarnings - totalWithdrawn - pendingWithdrawals);
+
+    // Calculate comprehensive statistics
     const stats = {
       totalAdopters: adoptions.filter(a => a.status === 'active').length,
-      totalEarnings: payments.reduce((sum, p) => sum + p.netAmount, 0),
+      activeAdopters: adoptions.filter(a => a.status === 'active').length,
+      totalEarnings: totalEarnings,
+      availableBalance: availableBalance,
       activeAdoptions: adoptions.filter(a => a.status === 'active').length,
       completedAdoptions: adoptions.filter(a => a.status === 'completed').length,
-      pendingPayments: payments.filter(p => p.status === 'pending').length
+      pendingPayments: payments.filter(p => p.status === 'pending').length,
+      totalUpdates: farmUpdates.length,
+      upcomingVisits: upcomingVisits.length,
+      totalVisits: visits.length,
+      pendingVisitRequests: visits.filter(v => v.status === 'requested').length,
+      confirmedVisits: visits.filter(v => v.status === 'confirmed').length,
+      unreadMessages: unreadMessages,
+      monthlyGoalProgress: 65 // Mock data - could be calculated based on targets
     };
+
+    // Recent activity feed
+    const recentActivity = [];
+    
+    // Add recent adoptions
+    adoptions.slice(0, 3).forEach(adoption => {
+      recentActivity.push({
+        type: 'adoption',
+        description: `New adoption by ${adoption.adopter?.firstName} ${adoption.adopter?.lastName}`,
+        date: adoption.createdAt,
+        data: adoption
+      });
+    });
+
+    // Add recent payments
+    payments.slice(0, 2).forEach(payment => {
+      recentActivity.push({
+        type: 'payment',
+        description: `Payment received: ${payment.currency} ${payment.netAmount}`,
+        date: payment.createdAt,
+        data: payment
+      });
+    });
+
+    // Add recent visits
+    upcomingVisits.slice(0, 2).forEach(visit => {
+      recentActivity.push({
+        type: 'visit',
+        description: `Upcoming visit by ${visit.adopter?.firstName} ${visit.adopter?.lastName}`,
+        date: visit.requestedDate,
+        data: visit
+      });
+    });
+
+    // Add recent farm updates
+    farmUpdates.slice(0, 2).forEach(update => {
+      recentActivity.push({
+        type: 'update',
+        description: `New farm update: ${update.title}`,
+        date: update.createdAt,
+        data: update
+      });
+    });
+
+    // Sort activity by date
+    recentActivity.sort((a, b) => new Date(b.date) - new Date(a.date));
+
+    // Tasks/Todos
+    const tasks = [
+      {
+        id: 'profile_completion',
+        title: 'Complete Profile',
+        description: 'Add profile photo and complete all sections',
+        priority: 'high',
+        completed: !!(farmer.media?.profileImage && farmer.description),
+        dueDate: null
+      },
+      {
+        id: 'weekly_update',
+        title: 'Share Weekly Update',
+        description: 'Share progress photos and updates with your adopters',
+        priority: 'medium',
+        completed: farmUpdates.some(u => 
+          new Date(u.createdAt) > new Date(Date.now() - 7 * 24 * 60 * 60 * 1000)
+        ),
+        dueDate: new Date(Date.now() + 2 * 24 * 60 * 60 * 1000) // 2 days from now
+      },
+      {
+        id: 'respond_messages',
+        title: 'Respond to Messages',
+        description: `You have ${unreadMessages} unread messages`,
+        priority: unreadMessages > 5 ? 'high' : 'low',
+        completed: unreadMessages === 0,
+        dueDate: null
+      },
+      {
+        id: 'set_availability',
+        title: 'Set Visit Availability',
+        description: 'Configure your availability for farm visits',
+        priority: 'medium',
+        completed: false, // Could check if farmer has set any availability
+        dueDate: null
+      }
+    ];
 
     res.json({
       success: true,
@@ -473,7 +577,12 @@ const getFarmerDashboard = async (req, res) => {
         farmer,
         adoptions: adoptions.slice(0, 10), // Latest 10
         payments: payments.slice(0, 10), // Latest 10
-        stats
+        farmUpdates: farmUpdates,
+        visits: visits,
+        upcomingVisits: upcomingVisits,
+        stats,
+        recentActivity: recentActivity.slice(0, 10),
+        tasks
       }
     });
   } catch (error) {
@@ -569,6 +678,408 @@ const deleteFarmMedia = async (req, res) => {
   }
 };
 
+// @desc    Get farmer reports and analytics
+// @route   GET /api/farmers/reports
+// @access  Private (Farmer only)
+const getFarmerReports = async (req, res) => {
+  try {
+    const userId = req.user._id;
+    const { period = 'month' } = req.query; // month, quarter, year
+    
+    const farmer = await FarmerProfile.findOne({ user: userId });
+    if (!farmer) {
+      return res.status(404).json({
+        success: false,
+        message: 'Farmer profile not found'
+      });
+    }
+
+    // Calculate date range
+    const now = new Date();
+    let startDate;
+    
+    switch (period) {
+      case 'quarter':
+        startDate = new Date(now.getFullYear(), Math.floor(now.getMonth() / 3) * 3, 1);
+        break;
+      case 'year':
+        startDate = new Date(now.getFullYear(), 0, 1);
+        break;
+      default: // month
+        startDate = new Date(now.getFullYear(), now.getMonth(), 1);
+    }
+
+    // Get period data
+    const adoptions = await Adoption.find({ 
+      farmer: userId,
+      createdAt: { $gte: startDate }
+    }).populate('adopter', 'firstName lastName');
+
+    const payments = await Payment.find({
+      'metadata.farmerName': farmer.farmName,
+      status: 'success',
+      createdAt: { $gte: startDate }
+    });
+
+    const FarmUpdate = require('../models/FarmUpdate');
+    const farmUpdates = await FarmUpdate.find({
+      farmer: farmer._id,
+      createdAt: { $gte: startDate }
+    });
+
+    const FarmVisit = require('../models/FarmVisit');
+    const visits = await FarmVisit.find({
+      farmer: farmer._id,
+      createdAt: { $gte: startDate }
+    });
+
+    // Calculate metrics
+    const totalRevenue = payments.reduce((sum, p) => sum + p.netAmount, 0);
+    const avgRevenuePerAdopter = adoptions.length > 0 ? totalRevenue / adoptions.length : 0;
+    
+    // Generate daily/weekly/monthly breakdown
+    const revenueBreakdown = [];
+    const adoptionBreakdown = [];
+    
+    // Simple monthly breakdown for demonstration
+    for (let i = 0; i < 12; i++) {
+      const monthStart = new Date(now.getFullYear(), i, 1);
+      const monthEnd = new Date(now.getFullYear(), i + 1, 0);
+      
+      const monthPayments = payments.filter(p => 
+        new Date(p.createdAt) >= monthStart && new Date(p.createdAt) <= monthEnd
+      );
+      
+      const monthAdoptions = adoptions.filter(a => 
+        new Date(a.createdAt) >= monthStart && new Date(a.createdAt) <= monthEnd
+      );
+      
+      revenueBreakdown.push({
+        period: monthStart.toISOString().slice(0, 7), // YYYY-MM format
+        revenue: monthPayments.reduce((sum, p) => sum + p.netAmount, 0),
+        count: monthPayments.length
+      });
+      
+      adoptionBreakdown.push({
+        period: monthStart.toISOString().slice(0, 7),
+        adoptions: monthAdoptions.length
+      });
+    }
+
+    const reports = {
+      period,
+      dateRange: { startDate, endDate: now },
+      summary: {
+        totalRevenue,
+        totalAdoptions: adoptions.length,
+        totalUpdates: farmUpdates.length,
+        totalVisits: visits.length,
+        avgRevenuePerAdopter,
+        growthRate: 12.5 // Mock data - would calculate based on previous period
+      },
+      revenueBreakdown: revenueBreakdown.filter(r => r.revenue > 0),
+      adoptionBreakdown: adoptionBreakdown.filter(a => a.adoptions > 0),
+      topAdopters: adoptions
+        .reduce((acc, adoption) => {
+          const adopterId = adoption.adopter._id.toString();
+          if (!acc[adopterId]) {
+            acc[adopterId] = {
+              adopter: adoption.adopter,
+              totalSpent: 0,
+              adoptionsCount: 0
+            };
+          }
+          acc[adopterId].adoptionsCount++;
+          return acc;
+        }, {}),
+      recentActivities: [
+        ...adoptions.slice(0, 5).map(a => ({
+          type: 'adoption',
+          description: `New adoption by ${a.adopter.firstName} ${a.adopter.lastName}`,
+          date: a.createdAt
+        })),
+        ...farmUpdates.slice(0, 5).map(u => ({
+          type: 'update',
+          description: `Farm update: ${u.title}`,
+          date: u.createdAt
+        }))
+      ].sort((a, b) => new Date(b.date) - new Date(a.date)).slice(0, 10)
+    };
+
+    res.json({
+      success: true,
+      data: reports
+    });
+  } catch (error) {
+    console.error('Get farmer reports error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error'
+    });
+  }
+};
+
+// @desc    Get farmer settings
+// @route   GET /api/farmers/settings
+// @access  Private (Farmer only)
+const getFarmerSettings = async (req, res) => {
+  try {
+    const userId = req.user._id;
+    
+    const farmer = await FarmerProfile.findOne({ user: userId })
+      .populate('user', 'firstName lastName email phone avatar');
+    
+    if (!farmer) {
+      return res.status(404).json({
+        success: false,
+        message: 'Farmer profile not found'
+      });
+    }
+
+    // Get user settings/preferences
+    const settings = {
+      profile: {
+        farmName: farmer.farmName,
+        description: farmer.description,
+        location: farmer.location,
+        contactInfo: farmer.contactInfo,
+        socialMedia: farmer.socialMedia,
+        profileImage: farmer.media?.profileImage?.url,
+        isPublic: farmer.isActive !== false
+      },
+      notifications: {
+        emailNotifications: true, // Would come from user preferences
+        smsNotifications: true,
+        pushNotifications: true,
+        adoptionUpdates: true,
+        paymentAlerts: true,
+        messageAlerts: true,
+        visitReminders: true
+      },
+      privacy: {
+        showContactInfo: farmer.contactInfo?.phone ? true : false,
+        showLocation: farmer.location?.county ? true : false,
+        allowDirectMessages: true,
+        profileVisibility: 'public'
+      },
+      account: {
+        email: farmer.user.email,
+        phone: farmer.user.phone || farmer.contactInfo?.phone,
+        bankDetails: farmer.bankDetails ? {
+          bankName: farmer.bankDetails.bankName,
+          accountName: farmer.bankDetails.accountName,
+          accountNumber: farmer.bankDetails.accountNumber?.slice(-4) // Only show last 4 digits
+        } : null,
+        verificationStatus: farmer.verificationStatus,
+        memberSince: farmer.createdAt
+      }
+    };
+
+    res.json({
+      success: true,
+      data: settings
+    });
+  } catch (error) {
+    console.error('Get farmer settings error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error'
+    });
+  }
+};
+
+// @desc    Update farmer settings
+// @route   PUT /api/farmers/settings
+// @access  Private (Farmer only)
+const updateFarmerSettings = async (req, res) => {
+  try {
+    const userId = req.user._id;
+    const { profile, notifications, privacy, account } = req.body;
+    
+    const farmer = await FarmerProfile.findOne({ user: userId });
+    if (!farmer) {
+      return res.status(404).json({
+        success: false,
+        message: 'Farmer profile not found'
+      });
+    }
+
+    // Update profile settings
+    if (profile) {
+      if (profile.farmName) farmer.farmName = profile.farmName;
+      if (profile.description) farmer.description = profile.description;
+      
+      // Handle location updates properly
+      if (profile.location) {
+        // Ensure we merge location properly and handle coordinates
+        farmer.location = {
+          county: profile.location.county || farmer.location?.county,
+          subCounty: profile.location.subCounty || farmer.location?.subCounty,
+          village: profile.location.village || farmer.location?.village,
+          coordinates: profile.location.coordinates ? {
+            latitude: parseFloat(profile.location.coordinates.latitude),
+            longitude: parseFloat(profile.location.coordinates.longitude)
+          } : farmer.location?.coordinates
+        };
+      }
+      
+      if (profile.contactInfo) {
+        farmer.contactInfo = {
+          phone: profile.contactInfo.phone || farmer.contactInfo?.phone,
+          email: profile.contactInfo.email || farmer.contactInfo?.email,
+          website: profile.contactInfo.website || farmer.contactInfo?.website
+        };
+      }
+      
+      if (profile.socialMedia) {
+        farmer.socialMedia = {
+          facebook: profile.socialMedia.facebook || farmer.socialMedia?.facebook,
+          twitter: profile.socialMedia.twitter || farmer.socialMedia?.twitter,
+          instagram: profile.socialMedia.instagram || farmer.socialMedia?.instagram
+        };
+      }
+      
+      if (profile.isPublic !== undefined) farmer.isActive = profile.isPublic;
+    }
+
+    // Update bank details if provided
+    if (account?.bankDetails) {
+      farmer.bankDetails = {
+        ...farmer.bankDetails,
+        ...account.bankDetails
+      };
+    }
+
+    await farmer.save();
+
+    // Update user account details
+    if (account) {
+      const User = require('../models/User');
+      const updateUser = {};
+      if (account.email) updateUser.email = account.email;
+      if (account.phone) updateUser.phone = account.phone;
+      
+      if (Object.keys(updateUser).length > 0) {
+        await User.findByIdAndUpdate(userId, updateUser);
+      }
+    }
+
+    res.json({
+      success: true,
+      message: 'Settings updated successfully'
+    });
+  } catch (error) {
+    console.error('Update farmer settings error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error'
+    });
+  }
+};
+
+// @desc    Change farmer password
+// @route   PUT /api/farmers/change-password
+// @access  Private (Farmer only)
+const changeFarmerPassword = async (req, res) => {
+  try {
+    const userId = req.user._id;
+    const { currentPassword, newPassword } = req.body;
+
+    if (!currentPassword || !newPassword) {
+      return res.status(400).json({
+        success: false,
+        message: 'Current password and new password are required'
+      });
+    }
+
+    const User = require('../models/User');
+    const bcrypt = require('bcryptjs');
+    
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+
+    // Check current password
+    const isCurrentPasswordValid = await bcrypt.compare(currentPassword, user.password);
+    if (!isCurrentPasswordValid) {
+      return res.status(400).json({
+        success: false,
+        message: 'Current password is incorrect'
+      });
+    }
+
+    // Hash new password
+    const salt = await bcrypt.genSalt(10);
+    const hashedNewPassword = await bcrypt.hash(newPassword, salt);
+
+    // Update password
+    user.password = hashedNewPassword;
+    await user.save();
+
+    res.json({
+      success: true,
+      message: 'Password changed successfully'
+    });
+  } catch (error) {
+    console.error('Change farmer password error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error'
+    });
+  }
+};
+
+// @desc    Get farmer's assigned experts/mentors
+// @route   GET /api/farmers/experts
+// @access  Private (Farmer only)
+const getFarmerExperts = async (req, res) => {
+  try {
+    const userId = req.user._id;
+    const ExpertMentorship = require('../models/ExpertMentorship');
+
+    // Get active mentorships for this farmer
+    const mentorships = await ExpertMentorship.find({ 
+      farmer: userId, 
+      status: 'active' 
+    })
+    .populate('expert', 'firstName lastName avatar email')
+    .populate('farmer', 'firstName lastName')
+    .sort({ startDate: -1 });
+
+    const experts = mentorships.map(mentorship => ({
+      _id: mentorship.expert._id,
+      firstName: mentorship.expert.firstName,
+      lastName: mentorship.expert.lastName,
+      avatar: mentorship.expert.avatar,
+      email: mentorship.expert.email,
+      specialization: mentorship.specialization,
+      mentorshipId: mentorship._id,
+      startDate: mentorship.startDate,
+      status: mentorship.status,
+      goals: mentorship.goals,
+      completedGoals: mentorship.goals.filter(goal => goal.status === 'completed').length,
+      totalGoals: mentorship.goals.length,
+      // Create conversation ID for messaging
+      conversationId: [userId, mentorship.expert._id].sort().join('_')
+    }));
+
+    res.json({
+      success: true,
+      data: { experts }
+    });
+  } catch (error) {
+    console.error('Get farmer experts error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error'
+    });
+  }
+};
+
 module.exports = {
   getFarmers,
   getFarmerById,
@@ -578,5 +1089,10 @@ module.exports = {
   uploadFarmVideos,
   getFarmerDashboard,
   getFarmerAdopters,
-  deleteFarmMedia
+  deleteFarmMedia,
+  getFarmerReports,
+  getFarmerSettings,
+  updateFarmerSettings,
+  changeFarmerPassword,
+  getFarmerExperts
 };
