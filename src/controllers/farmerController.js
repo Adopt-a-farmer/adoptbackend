@@ -2,6 +2,7 @@ const FarmerProfile = require('../models/FarmerProfile');
 const User = require('../models/User');
 const Adoption = require('../models/Adoption');
 const Payment = require('../models/Payment');
+const Message = require('../models/Message');
 const { uploadImage, uploadVideo, deleteFile } = require('../utils/cloudinaryUtils');
 const FarmerProfileService = require('../services/farmerProfileService');
 
@@ -100,13 +101,51 @@ const getFarmers = async (req, res) => {
 
     console.log('[FARMERS API] Sort criteria:', sort);
 
-    const farmers = await FarmerProfile.find(filter)
+    // First get all farmers that match the filter
+    const allFarmers = await FarmerProfile.find(filter)
       .populate('user', 'firstName lastName avatar')
-      .sort(sort)
-      .skip(skip)
-      .limit(limit);
+      .sort(sort);
 
-    const total = await FarmerProfile.countDocuments(filter);
+    // Get adoption information for each farmer
+    const farmersWithAdoptionInfo = await Promise.all(
+      allFarmers.map(async (farmer) => {
+        const activeAdoptions = await Adoption.countDocuments({
+          farmer: farmer.user._id,
+          status: 'active'
+        });
+        
+        // Check if current user (if authenticated) has adopted this farmer
+        let isAdoptedByCurrentUser = false;
+        if (req.user) {
+          const userAdoption = await Adoption.findOne({
+            farmer: farmer.user._id,
+            adopter: req.user._id,
+            status: { $in: ['active', 'pending'] }
+          });
+          isAdoptedByCurrentUser = !!userAdoption;
+        }
+        
+        const isAdopted = activeAdoptions > 0;
+        
+        return {
+          ...farmer.toObject(),
+          isAdopted,
+          isAdoptedByCurrentUser,
+          activeAdoptionsCount: activeAdoptions
+        };
+      })
+    );
+
+    // Separate farmers based on current user's adoption status
+    const availableFarmers = farmersWithAdoptionInfo.filter(f => !f.isAdoptedByCurrentUser);
+    const userAdoptedFarmers = farmersWithAdoptionInfo.filter(f => f.isAdoptedByCurrentUser);
+
+    // Prioritize available farmers first, then user's adopted farmers
+    const prioritizedFarmers = [...availableFarmers, ...userAdoptedFarmers];
+
+    // Apply pagination to the prioritized list
+    const farmers = prioritizedFarmers.slice(skip, skip + limit);
+    const total = prioritizedFarmers.length;
 
     console.log(`[FARMERS API] Found ${farmers.length} farmers out of ${total} total`);
     console.log('[FARMERS API] Farmers data:', farmers.map(f => ({
@@ -606,7 +645,6 @@ const getFarmerAdopters = async (req, res) => {
       status: { $in: ['active', 'completed'] }
     })
     .populate('adopter', 'firstName lastName avatar email phone')
-    .populate('adoption')
     .sort({ createdAt: -1 });
 
     res.json({
@@ -1080,6 +1118,185 @@ const getFarmerExperts = async (req, res) => {
   }
 };
 
+// @desc    Get farmer conversations for messaging
+// @route   GET /api/farmers/conversations
+// @access  Private (Farmer only)
+const getFarmerConversations = async (req, res) => {
+  try {
+    const farmerId = req.user._id;
+    const Message = require('../models/Message');
+
+    // Get all adoptions for this farmer
+    const adoptions = await Adoption.find({ farmer: farmerId, status: 'active' })
+      .populate('adopter', 'firstName lastName avatar email')
+      .sort({ createdAt: -1 });
+
+    // Create conversation data for each adopter with last message and unread count
+    const conversationsPromises = adoptions.map(async adoption => {
+      const conversationId = [farmerId, adoption.adopter._id].sort().join('_');
+      
+      // Get last message for this conversation
+      const lastMessage = await Message.findOne({ conversationId })
+        .populate('sender', 'firstName lastName avatar')
+        .populate('recipient', 'firstName lastName avatar')
+        .sort({ createdAt: -1 });
+
+      // Get unread count for this conversation
+      const unreadCount = await Message.countDocuments({
+        conversationId,
+        recipient: farmerId,
+        isRead: false
+      });
+
+      return {
+        conversationId,
+        participant: {
+          _id: adoption.adopter._id,
+          firstName: adoption.adopter.firstName,
+          lastName: adoption.adopter.lastName,
+          avatar: adoption.adopter.avatar,
+          role: 'adopter'
+        },
+        lastMessage: lastMessage || null,
+        unreadCount,
+        updatedAt: lastMessage ? lastMessage.createdAt : adoption.createdAt
+      };
+    });
+
+    const conversations = await Promise.all(conversationsPromises);
+
+    // Sort by last activity
+    conversations.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+
+    res.json({
+      success: true,
+      data: conversations
+    });
+  } catch (error) {
+    console.error('Get farmer conversations error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error'
+    });
+  }
+};
+
+// @desc    Get farmer-adopter conversations
+// @route   GET /api/farmers/conversations/adopters
+// @access  Private (Farmer only)
+const getFarmerAdopterConversations = async (req, res) => {
+  try {
+    const farmerId = req.user._id;
+
+    // Get all active adoptions for this farmer
+    const adoptions = await Adoption.find({
+      farmer: farmerId,
+      status: { $in: ['active', 'pending'] }
+    })
+    .populate('adopter', 'firstName lastName avatar email')
+    .sort({ createdAt: -1 });
+
+    // Create conversation data for each adoption
+    const conversations = await Promise.all(
+      adoptions.map(async (adoption) => {
+        const adopterId = adoption.adopter._id;
+        const conversationId = [adopterId, farmerId].sort().join('_');
+        
+        // Get latest message in this conversation
+        const latestMessage = await Message.findOne({
+          conversationId,
+          adoption: adoption._id
+        })
+        .sort({ createdAt: -1 })
+        .populate('sender', 'firstName lastName');
+
+        // Get unread message count
+        const unreadCount = await Message.countDocuments({
+          conversationId,
+          adoption: adoption._id,
+          recipient: farmerId,
+          isRead: false
+        });
+
+        return {
+          conversationId,
+          adoption: {
+            _id: adoption._id,
+            status: adoption.status,
+            monthlyContribution: adoption.adoptionDetails?.monthlyContribution,
+            startDate: adoption.createdAt
+          },
+          adopter: adoption.adopter,
+          latestMessage: latestMessage ? {
+            content: latestMessage.content,
+            createdAt: latestMessage.createdAt,
+            sender: latestMessage.sender
+          } : null,
+          unreadCount
+        };
+      })
+    );
+
+    res.json({
+      success: true,
+      data: conversations
+    });
+  } catch (error) {
+    console.error('Get farmer-adopter conversations error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error'
+    });
+  }
+};
+
+// @desc    Get farmer messaging statistics
+// @route   GET /api/farmers/messaging-stats
+// @access  Private (Farmer only)
+const getFarmerMessagingStats = async (req, res) => {
+  try {
+    const farmerId = req.user._id;
+    const Message = require('../models/Message');
+
+    // Get message statistics
+    const totalMessages = await Message.countDocuments({
+      $or: [{ sender: farmerId }, { recipient: farmerId }]
+    });
+
+    const unreadMessages = await Message.countDocuments({
+      recipient: farmerId,
+      isRead: false
+    });
+
+    const totalConversations = await Message.distinct('conversationId', {
+      $or: [{ sender: farmerId }, { recipient: farmerId }]
+    });
+
+    // Get active adopters count from adoptions
+    const activeAdopters = await Adoption.countDocuments({ 
+      farmer: farmerId, 
+      status: 'active' 
+    });
+
+    res.json({
+      success: true,
+      data: {
+        totalMessages,
+        unreadMessages,
+        totalConversations: totalConversations.length,
+        activeAdopters,
+        readRate: totalMessages > 0 ? ((totalMessages - unreadMessages) / totalMessages * 100).toFixed(1) : 0
+      }
+    });
+  } catch (error) {
+    console.error('Get farmer messaging stats error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error'
+    });
+  }
+};
+
 module.exports = {
   getFarmers,
   getFarmerById,
@@ -1094,5 +1311,8 @@ module.exports = {
   getFarmerSettings,
   updateFarmerSettings,
   changeFarmerPassword,
-  getFarmerExperts
+  getFarmerExperts,
+  getFarmerConversations,
+  getFarmerMessagingStats,
+  getFarmerAdopterConversations
 };

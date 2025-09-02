@@ -130,7 +130,15 @@ const getWalletTransactions = async (req, res) => {
 
     res.json({
       success: true,
-      data: transactions.slice(0, limit)
+      data: {
+        transactions: transactions.slice(0, limit),
+        pagination: {
+          page,
+          limit,
+          total: transactions.length,
+          pages: Math.ceil(transactions.length / limit)
+        }
+      }
     });
   } catch (error) {
     console.error('Get wallet transactions error:', error);

@@ -27,14 +27,8 @@ const getAdopterDashboard = async (req, res) => {
 
     // Get adoptions
     const adoptions = await Adoption.find({ adopter: userId })
-      .populate('farmer', 'firstName lastName avatar')
-      .populate({
-        path: 'farmer',
-        populate: {
-          path: 'user',
-          select: 'firstName lastName avatar'
-        }
-      })
+      .populate('farmer', 'firstName lastName avatar email')
+      .populate('adopter', 'firstName lastName avatar email')
       .sort({ createdAt: -1 });
 
     // Get payments
@@ -122,31 +116,41 @@ const getAdoptedFarmers = async (req, res) => {
 
     const adoptions = await Adoption.find({ 
       adopter: userId,
-      status: { $in: ['active', 'completed'] }
+      status: { $in: ['active', 'completed', 'pending'] }
     })
-    .populate({
-      path: 'farmer',
-      populate: {
-        path: 'user',
-        select: 'firstName lastName avatar'
-      }
-    })
+    .populate('farmer', 'firstName lastName avatar email')
+    .populate('adopter', 'firstName lastName avatar email')
     .sort({ createdAt: -1 });
 
-    // Get farmer profiles for adopted farmers
-    const farmersData = await Promise.all(
-      adoptions.map(async (adoption) => {
-        const farmerProfile = await FarmerProfile.findOne({ user: adoption.farmer._id });
-        return {
-          adoption,
-          farmerProfile
-        };
-      })
-    );
+    // Transform data to match frontend Adoption interface
+    const transformedAdoptions = adoptions.map(adoption => ({
+      _id: adoption._id,
+      farmer: {
+        _id: adoption.farmer._id,
+        firstName: adoption.farmer.firstName,
+        lastName: adoption.farmer.lastName,
+        email: adoption.farmer.email,
+        avatar: adoption.farmer.avatar
+      },
+      adopter: {
+        _id: userId,
+        firstName: req.user.firstName,
+        lastName: req.user.lastName,
+        email: req.user.email
+      },
+      monthlyContribution: adoption.adoptionDetails?.monthlyContribution || 0,
+      currency: adoption.adoptionDetails?.currency || 'KES',
+      status: adoption.status,
+      startDate: adoption.createdAt,
+      totalContributed: adoption.paymentPlan?.totalPaid || adoption.adoptionDetails?.monthlyContribution || 0,
+      message: adoption.adoptionDetails?.message,
+      createdAt: adoption.createdAt,
+      updatedAt: adoption.updatedAt
+    }));
 
     res.json({
       success: true,
-      data: { farmersData }
+      data: transformedAdoptions
     });
   } catch (error) {
     console.error('Get adopted farmers error:', error);
@@ -238,15 +242,19 @@ const adoptFarmer = async (req, res) => {
 
     const adoption = await Adoption.create(adoptionData);
 
-    // Update farmer adoption stats
+    // Update farmer adoption stats immediately
     if (farmer.adoptionStats) {
       farmer.adoptionStats.currentAdoptions = (farmer.adoptionStats.currentAdoptions || 0) + 1;
+      farmer.adoptionStats.totalFunding = (farmer.adoptionStats.totalFunding || 0) + (adoptionDetails?.monthlyContribution || paymentPlan?.amount || 0);
     } else {
-      farmer.adoptionStats = { currentAdoptions: 1 };
+      farmer.adoptionStats = { 
+        currentAdoptions: 1,
+        totalFunding: adoptionDetails?.monthlyContribution || paymentPlan?.amount || 0
+      };
     }
     await farmer.save();
 
-    // Update adopter stats
+    // Update adopter stats immediately
     const adopter = await AdopterProfile.findOne({ user: adopterId });
     if (adopter) {
       if (adopter.adoptionHistory) {
@@ -256,6 +264,13 @@ const adoptFarmer = async (req, res) => {
         adopter.adoptionHistory = {
           totalAdoptions: 1,
           activeAdoptions: 1
+        };
+      }
+      if (adopter.investmentProfile) {
+        adopter.investmentProfile.totalInvested = (adopter.investmentProfile.totalInvested || 0) + (adoptionDetails?.monthlyContribution || paymentPlan?.amount || 0);
+      } else {
+        adopter.investmentProfile = {
+          totalInvested: adoptionDetails?.monthlyContribution || paymentPlan?.amount || 0
         };
       }
       await adopter.save();
@@ -339,7 +354,7 @@ const adoptFarmerWithPayment = async (req, res) => {
       adopter: adopterId,
       farmer: farmerUserId,
       adoptionType,
-      status: 'pending',
+      status: 'active', // Set to active immediately for testing
       adoptionDetails: {
         ...adoptionDetails,
         monthlyContribution: adoptionDetails?.monthlyContribution || paymentPlan?.amount,
@@ -352,13 +367,24 @@ const adoptFarmerWithPayment = async (req, res) => {
           }
         })
       },
-      paymentPlan
+      paymentPlan,
+      startDate: new Date() // Set start date immediately
     };
 
     const adoption = await Adoption.create(adoptionData);
 
     // Initialize payment
     const amount = adoptionDetails?.monthlyContribution || paymentPlan?.amount;
+    
+    // Validate amount
+    if (!amount || amount <= 0) {
+      await Adoption.findByIdAndDelete(adoption._id);
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid payment amount'
+      });
+    }
+
     const reference = `AAF_${Date.now()}_${adoption._id.toString().substr(-8)}`;
 
     const paystackData = {
@@ -388,6 +414,8 @@ const adoptFarmerWithPayment = async (req, res) => {
       }
     };
 
+    console.log('Paystack data being sent:', paystackData);
+
     const paystackResponse = await initializePayment(paystackData);
 
     if (!paystackResponse.status) {
@@ -404,11 +432,16 @@ const adoptFarmerWithPayment = async (req, res) => {
     adoption.paymentReference = reference;
     await adoption.save();
 
+    // Populate the adoption before returning
+    const populatedAdoption = await Adoption.findById(adoption._id)
+      .populate('adopter', 'firstName lastName avatar email')
+      .populate('farmer', 'firstName lastName avatar email');
+
     res.status(201).json({
       success: true,
-      message: 'Adoption created and payment initialized successfully',
+      message: 'Adoption created and activated successfully! Payment link is ready for processing.',
       data: {
-        adoption: adoption,
+        adoption: populatedAdoption,
         payment: {
           authorization_url: paystackResponse.data.authorization_url,
           access_code: paystackResponse.data.access_code,
@@ -418,9 +451,27 @@ const adoptFarmerWithPayment = async (req, res) => {
     });
   } catch (error) {
     console.error('Adopt farmer with payment error:', error);
+    
+    // More specific error messages
+    if (error.message && error.message.includes('Payment initialization failed')) {
+      return res.status(400).json({
+        success: false,
+        message: 'Payment system is currently unavailable. Please try again later.',
+        error: error.message
+      });
+    }
+    
+    if (error.code === 11000) {
+      return res.status(400).json({
+        success: false,
+        message: 'Duplicate adoption request detected'
+      });
+    }
+    
     res.status(500).json({
       success: false,
-      message: 'Server error while creating adoption with payment'
+      message: 'Server error while creating adoption with payment',
+      error: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error'
     });
   }
 };
@@ -616,74 +667,6 @@ const getMentoringFarmers = async (req, res) => {
   }
 };
 
-// @desc    Get conversations for adopter mentoring
-// @route   GET /api/adopters/conversations
-// @access  Private (Adopter only)
-const getMentoringConversations = async (req, res) => {
-  try {
-    const userId = req.user._id;
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 20;
-    const skip = (page - 1) * limit;
-
-    // Get all mentorships for this adopter
-    const mentorships = await ExpertMentorship.find({ expert: userId })
-      .populate('farmer', 'firstName lastName avatar');
-
-    const conversations = await Promise.all(mentorships.map(async (mentorship) => {
-      const conversationId = `${userId}_${mentorship.farmer._id}`;
-      
-      const lastMessage = await Message.findOne({ conversationId })
-        .sort({ createdAt: -1 })
-        .populate('sender', 'firstName lastName avatar');
-
-      const unreadCount = await Message.countDocuments({
-        conversationId,
-        recipient: userId,
-        isRead: false
-      });
-
-      return {
-        conversationId,
-        farmer: mentorship.farmer,
-        mentorship: {
-          _id: mentorship._id,
-          specialization: mentorship.specialization,
-          status: mentorship.status
-        },
-        lastMessage,
-        unreadCount,
-        updatedAt: lastMessage?.createdAt || mentorship.createdAt
-      };
-    }));
-
-    // Sort by last message date
-    conversations.sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
-
-    // Apply pagination
-    const paginatedConversations = conversations.slice(skip, skip + limit);
-
-    res.json({
-      success: true,
-      data: {
-        conversations: paginatedConversations,
-        pagination: {
-          page,
-          limit,
-          total: conversations.length,
-          pages: Math.ceil(conversations.length / limit)
-        }
-      }
-    });
-  } catch (error) {
-    console.error('Get mentoring conversations error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Server error'
-    });
-  }
-};
-
 // @desc    Create mentorship with farmer
 // @route   POST /api/adopters/mentoring
 // @access  Private (Adopter only)
@@ -745,6 +728,228 @@ const createMentorship = async (req, res) => {
   }
 };
 
+// @desc    Check if farmer is adopted by current user
+// @route   GET /api/adopters/adoptions/check/:farmerId
+// @access  Private (Adopter only)
+const checkAdoptionStatus = async (req, res) => {
+  try {
+    const adopterId = req.user._id;
+    const { farmerId } = req.params;
+
+    // Check if adoption exists
+    const adoption = await Adoption.findOne({
+      adopter: adopterId,
+      farmer: farmerId,
+      status: { $in: ['active', 'pending'] }
+    });
+
+    res.json({
+      success: true,
+      data: {
+        isAdopted: !!adoption,
+        adoption: adoption ? {
+          _id: adoption._id,
+          status: adoption.status,
+          createdAt: adoption.createdAt
+        } : null
+      }
+    });
+  } catch (error) {
+    console.error('Check adoption status error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error'
+    });
+  }
+};
+
+// @desc    Get adopter conversations
+// @route   GET /api/adopters/conversations
+// @access  Private (Adopter only)
+const getAdopterConversations = async (req, res) => {
+  try {
+    const adopterId = req.user._id;
+
+    // Get all adoptions for this adopter
+    const adoptions = await Adoption.find({ adopter: adopterId })
+      .populate('farmer', '_id firstName lastName avatar')
+      .select('farmer createdAt');
+
+    // Get conversations with farmers
+    const conversations = [];
+    
+    for (const adoption of adoptions) {
+      if (adoption.farmer) {
+        const conversationId = [adopterId, adoption.farmer._id].sort().join('_');
+        
+        // Get last message for this conversation
+        const lastMessage = await Message.findOne({ conversationId })
+          .sort({ createdAt: -1 })
+          .populate('sender', 'firstName lastName')
+          .populate('recipient', 'firstName lastName');
+
+        // Get unread count
+        const unreadCount = await Message.countDocuments({
+          conversationId,
+          recipient: adopterId,
+          isRead: false
+        });
+
+        conversations.push({
+          id: conversationId,
+          conversationId,
+          participant_id: adoption.farmer._id,
+          participant_name: `${adoption.farmer.firstName} ${adoption.farmer.lastName}`,
+          participant_image: adoption.farmer.avatar || '',
+          participant_role: 'farmer',
+          last_message: lastMessage ? (lastMessage.content?.text || 'File') : 'No messages yet',
+          last_message_at: lastMessage?.createdAt || adoption.createdAt,
+          unread_count: unreadCount,
+          status: 'active',
+          participant_details: {
+            role: 'farmer',
+            adoptionDate: adoption.createdAt
+          }
+        });
+      }
+    }
+
+    // Sort by last message date
+    conversations.sort((a, b) => new Date(b.last_message_at) - new Date(a.last_message_at));
+
+    res.json({
+      success: true,
+      data: {
+        conversations,
+        totalUnread: conversations.reduce((total, conv) => total + conv.unread_count, 0)
+      }
+    });
+  } catch (error) {
+    console.error('Get adopter conversations error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error'
+    });
+  }
+};
+
+// @desc    Get mentoring conversations for adopter
+// @route   GET /api/adopters/mentoring/conversations
+// @access  Private (Adopter only)
+const getMentoringConversations = async (req, res) => {
+  try {
+    const adopterId = req.user._id;
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10;
+
+    // Get mentoring relationships
+    const mentorships = await ExpertMentorship.find({ adopter: adopterId })
+      .populate('farmer', 'firstName lastName avatar')
+      .sort({ createdAt: -1 });
+
+    // For now, return empty conversations as this is a placeholder
+    // In a real implementation, you would fetch actual conversation data
+    const conversations = mentorships.map(mentorship => ({
+      id: mentorship._id,
+      farmer: mentorship.farmer,
+      specialization: mentorship.specialization,
+      status: mentorship.status,
+      lastInteraction: mentorship.updatedAt,
+      messageCount: 0 // Placeholder
+    }));
+
+    const paginatedConversations = conversations.slice((page - 1) * limit, page * limit);
+
+    res.json({
+      success: true,
+      data: {
+        conversations: paginatedConversations,
+        pagination: {
+          page,
+          limit,
+          total: conversations.length,
+          pages: Math.ceil(conversations.length / limit)
+        }
+      }
+    });
+  } catch (error) {
+    console.error('Get mentoring conversations error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error'
+    });
+  }
+};
+
+// @desc    Get adopter-farmer conversations
+// @route   GET /api/adopters/conversations/farmers
+// @access  Private (Adopter only)
+const getAdopterFarmerConversations = async (req, res) => {
+  try {
+    const adopterId = req.user._id;
+
+    // Get all active adoptions for this adopter
+    const adoptions = await Adoption.find({
+      adopter: adopterId,
+      status: { $in: ['active', 'pending'] }
+    })
+    .populate('farmer', 'firstName lastName avatar email')
+    .sort({ createdAt: -1 });
+
+    // Create conversation data for each adoption
+    const conversations = await Promise.all(
+      adoptions.map(async (adoption) => {
+        const farmerId = adoption.farmer._id;
+        const conversationId = [adopterId, farmerId].sort().join('_');
+        
+        // Get latest message in this conversation
+        const latestMessage = await Message.findOne({
+          conversationId,
+          adoption: adoption._id
+        })
+        .sort({ createdAt: -1 })
+        .populate('sender', 'firstName lastName');
+
+        // Get unread message count
+        const unreadCount = await Message.countDocuments({
+          conversationId,
+          adoption: adoption._id,
+          recipient: adopterId,
+          isRead: false
+        });
+
+        return {
+          conversationId,
+          adoption: {
+            _id: adoption._id,
+            status: adoption.status,
+            monthlyContribution: adoption.adoptionDetails?.monthlyContribution,
+            startDate: adoption.createdAt
+          },
+          farmer: adoption.farmer,
+          latestMessage: latestMessage ? {
+            content: latestMessage.content,
+            createdAt: latestMessage.createdAt,
+            sender: latestMessage.sender
+          } : null,
+          unreadCount
+        };
+      })
+    );
+
+    res.json({
+      success: true,
+      data: conversations
+    });
+  } catch (error) {
+    console.error('Get adopter-farmer conversations error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error'
+    });
+  }
+};
+
 module.exports = {
   getAdopterDashboard,
   updateAdopterProfile,
@@ -756,5 +961,8 @@ module.exports = {
   getInvestmentAnalytics,
   getMentoringFarmers,
   getMentoringConversations,
-  createMentorship
+  createMentorship,
+  getAdopterConversations,
+  checkAdoptionStatus,
+  getAdopterFarmerConversations
 };

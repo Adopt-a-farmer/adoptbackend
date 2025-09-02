@@ -1,13 +1,11 @@
 const Message = require('../models/Message');
 const User = require('../models/User');
 const { uploadImage, deleteFile } = require('../utils/cloudinaryUtils');
-const multer = require('multer');
-const path = require('path');
 
 // @desc    Get messages for a conversation
-// @route   GET /api/messages/:conversationId
+// @route   GET /api/messages/conversation/:conversationId
 // @access  Private
-const getMessages = async (req, res) => {
+const getConversationMessages = async (req, res) => {
   try {
     const { conversationId } = req.params;
     const userId = req.user._id;
@@ -27,41 +25,24 @@ const getMessages = async (req, res) => {
     const messages = await Message.find({ conversationId })
       .populate('sender', 'firstName lastName avatar')
       .populate('recipient', 'firstName lastName avatar')
-      .populate('replyTo')
-      .sort({ createdAt: -1 })
+      .sort({ createdAt: 1 }) // Ascending order for chat display
       .skip(skip)
       .limit(limit);
 
     const total = await Message.countDocuments({ conversationId });
 
-    // Mark messages as read
-    await Message.updateMany(
-      {
-        conversationId,
-        recipient: userId,
-        isRead: false
-      },
-      {
-        isRead: true,
-        readAt: new Date()
-      }
-    );
-
     res.json({
       success: true,
-      data: {
-        messages: messages.reverse(), // Reverse to show oldest first
-        pagination: {
-          current: page,
-          pages: Math.ceil(total / limit),
-          total,
-          hasNext: page * limit < total,
-          hasPrev: page > 1
-        }
+      data: messages,
+      pagination: {
+        page,
+        limit,
+        total,
+        pages: Math.ceil(total / limit)
       }
     });
   } catch (error) {
-    console.error('Get messages error:', error);
+    console.error('Get conversation messages error:', error);
     res.status(500).json({
       success: false,
       message: 'Server error'
@@ -77,7 +58,7 @@ const sendMessage = async (req, res) => {
     const senderId = req.user._id;
     const {
       recipient,
-      messageType,
+      messageType = 'text',
       content,
       adoption,
       replyTo
@@ -133,6 +114,84 @@ const sendMessage = async (req, res) => {
   }
 };
 
+// @desc    Mark conversation as read
+// @route   PUT /api/messages/conversation/:conversationId/mark-read
+// @access  Private
+const markConversationAsRead = async (req, res) => {
+  try {
+    const { conversationId } = req.params;
+    const userId = req.user._id;
+
+    // Mark all unread messages in conversation as read
+    await Message.updateMany(
+      {
+        conversationId,
+        recipient: userId,
+        isRead: false
+      },
+      {
+        isRead: true,
+        readAt: new Date()
+      }
+    );
+
+    res.json({
+      success: true,
+      message: 'Messages marked as read'
+    });
+  } catch (error) {
+    console.error('Mark conversation as read error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error'
+    });
+  }
+};
+
+// @desc    Get messages between users
+// @route   GET /api/messages/:userId
+// @access  Private
+const getMessages = async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const senderId = req.user._id;
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 50;
+    const skip = (page - 1) * limit;
+
+    // Create conversation ID (consistent ordering)
+    const conversationId = [senderId, userId].sort().join('_');
+
+    const messages = await Message.find({ conversationId })
+      .populate('sender', 'firstName lastName avatar')
+      .populate('recipient', 'firstName lastName avatar')
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit);
+
+    const total = await Message.countDocuments({ conversationId });
+
+    res.json({
+      success: true,
+      data: {
+        messages: messages.reverse(), // Reverse to show oldest first
+        pagination: {
+          current: page,
+          pages: Math.ceil(total / limit),
+          total,
+          hasNext: page * limit < total,
+          hasPrev: page > 1
+        }
+      }
+    });
+  } catch (error) {
+    console.error('Get messages error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error'
+    });
+  }
+};
 // @desc    Get conversations list
 // @route   GET /api/messages/conversations
 // @access  Private
@@ -442,10 +501,12 @@ const sendMessageWithFile = async (req, res) => {
 };
 
 module.exports = {
+  getConversationMessages,
   getMessages,
   sendMessage,
   sendMessageWithFile,
   getConversations,
+  markConversationAsRead,
   markMessagesAsRead,
   deleteMessage,
   getUnreadCount

@@ -10,7 +10,10 @@ const {
   getInvestmentAnalytics,
   getMentoringFarmers,
   getMentoringConversations,
-  createMentorship
+  createMentorship,
+  getAdopterConversations,
+  checkAdoptionStatus,
+  getAdopterFarmerConversations
 } = require('../controllers/adopterController');
 const { protect, authorize } = require('../middleware/auth');
 
@@ -31,10 +34,15 @@ router.post('/adopt-with-payment', adoptFarmerWithPayment);
 router.get('/payments', getPaymentHistory);
 router.get('/visits', getVisits);
 router.get('/analytics', getInvestmentAnalytics);
+router.get('/adoptions/check/:farmerId', checkAdoptionStatus);
+router.get('/conversations/farmers', getAdopterFarmerConversations);
 
 // Mentoring routes
 router.get('/mentoring', getMentoringFarmers);
 router.post('/mentoring', createMentorship);
 router.get('/mentoring/conversations', getMentoringConversations);
+
+// Conversation routes for messaging
+router.get('/conversations', getAdopterConversations);
 
 module.exports = router;

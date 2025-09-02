@@ -9,14 +9,15 @@ const { generateToken, generateRefreshToken, verifyRefreshToken } = require('../
 // @access  Public
 const register = async (req, res) => {
   try {
-    const { firstName, lastName, email, password, role, phone } = req.body;
+    const { firstName, lastName, email, password, role, phone, farmerProfile } = req.body;
 
     console.log('🚀 Registration attempt:', {
       email,
       role,
       firstName,
       lastName,
-      phone: phone || 'not provided'
+      phone: phone || 'not provided',
+      hasDetailedProfile: !!farmerProfile
     });
 
     // Check if user exists
@@ -47,25 +48,70 @@ const register = async (req, res) => {
 
     // Create role-specific profile
     if (role === 'farmer') {
-      await FarmerProfile.create({
+      const profileData = {
         user: user._id,
-        farmName: `${firstName} ${lastName}'s Farm`,
-        description: 'New farmer profile - please update your farm description',
-        location: {
-          county: 'Not specified',
-          subCounty: 'Not specified'
-        },
-        farmSize: {
-          value: 1,
-          unit: 'acres'
-        },
-        farmingType: ['crop'],
-        cropTypes: [],
-        farmingMethods: [],
-        crops: [],
-        livestock: [],
-        certifications: []
-      });
+        verificationStatus: 'verified', // Auto-verify new farmers
+        isActive: true
+      };
+
+      // Use detailed profile data if provided, otherwise use defaults
+      if (farmerProfile) {
+        console.log('📋 Creating detailed farmer profile:', farmerProfile);
+        Object.assign(profileData, {
+          farmName: farmerProfile.farmName || `${firstName} ${lastName}'s Farm`,
+          description: farmerProfile.description || 'New farmer profile - please update your farm description',
+          location: {
+            county: farmerProfile.location?.county || 'Not specified',
+            subCounty: farmerProfile.location?.subCounty || 'Not specified',
+            village: farmerProfile.location?.village || ''
+          },
+          farmSize: {
+            value: farmerProfile.farmSize?.value || 1,
+            unit: farmerProfile.farmSize?.unit || 'acres'
+          },
+          establishedYear: farmerProfile.establishedYear || new Date().getFullYear(),
+          farmingType: farmerProfile.farmingType && farmerProfile.farmingType.length > 0 
+            ? farmerProfile.farmingType 
+            : ['crop'],
+          cropTypes: farmerProfile.cropTypes || [],
+          farmingMethods: farmerProfile.farmingMethods || [],
+          contactInfo: {
+            phone: farmerProfile.contactInfo?.phone || phone,
+            email: farmerProfile.contactInfo?.email || email,
+            website: farmerProfile.contactInfo?.website || ''
+          },
+          socialMedia: {
+            facebook: farmerProfile.socialMedia?.facebook || '',
+            twitter: farmerProfile.socialMedia?.twitter || '',
+            instagram: farmerProfile.socialMedia?.instagram || ''
+          },
+          crops: [],
+          livestock: [],
+          certifications: []
+        });
+      } else {
+        // Default profile data
+        Object.assign(profileData, {
+          farmName: `${firstName} ${lastName}'s Farm`,
+          description: 'New farmer profile - please update your farm description',
+          location: {
+            county: 'Not specified',
+            subCounty: 'Not specified'
+          },
+          farmSize: {
+            value: 1,
+            unit: 'acres'
+          },
+          farmingType: ['crop'],
+          cropTypes: [],
+          farmingMethods: [],
+          crops: [],
+          livestock: [],
+          certifications: []
+        });
+      }
+
+      await FarmerProfile.create(profileData);
       console.log('✅ FarmerProfile created for user:', user._id);
     } else if (role === 'adopter') {
       await AdopterProfile.create({

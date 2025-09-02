@@ -2,10 +2,12 @@ const express = require('express');
 const multer = require('multer');
 const path = require('path');
 const {
+  getConversationMessages,
   getMessages,
   sendMessage,
   sendMessageWithFile,
   getConversations,
+  markConversationAsRead,
   markMessagesAsRead,
   deleteMessage,
   getUnreadCount
@@ -49,6 +51,8 @@ router.use(protect);
 
 router.get('/conversations', getConversations);
 router.get('/unread-count', getUnreadCount);
+router.get('/conversation/:conversationId', getConversationMessages);
+router.put('/conversation/:conversationId/mark-read', markConversationAsRead);
 router.get('/:conversationId', getMessages);
 router.post('/send', validateMessage, validate, sendMessage);
 router.post('/send-file', upload.single('file'), sendMessageWithFile);

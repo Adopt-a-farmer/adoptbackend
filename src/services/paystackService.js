@@ -1,9 +1,33 @@
 const paystack = require('paystack')(process.env.PAYSTACK_SECRET_KEY);
 const crypto = require('crypto');
 
+// Validate Paystack configuration
+if (!process.env.PAYSTACK_SECRET_KEY) {
+  console.error('PAYSTACK_SECRET_KEY is not set in environment variables');
+}
+
+console.log('Paystack service initialized with key:', process.env.PAYSTACK_SECRET_KEY ? 'Key present' : 'Key missing');
+
 // Initialize Paystack payment
 const initializePayment = async (paymentData) => {
   try {
+    // Validate required fields
+    if (!paymentData.email || !paymentData.amount || !paymentData.reference) {
+      throw new Error('Missing required payment fields: email, amount, or reference');
+    }
+
+    // Validate amount is positive
+    if (paymentData.amount <= 0) {
+      throw new Error('Payment amount must be greater than 0');
+    }
+
+    console.log('Initializing Paystack payment with data:', {
+      email: paymentData.email,
+      amount: paymentData.amount,
+      reference: paymentData.reference,
+      currency: paymentData.currency
+    });
+
     const response = await paystack.transaction.initialize({
       email: paymentData.email,
       amount: paymentData.amount * 100, // Convert to kobo (or smallest currency unit)
@@ -14,10 +38,16 @@ const initializePayment = async (paymentData) => {
       channels: ['card', 'bank', 'ussd', 'qr', 'mobile_money', 'bank_transfer']
     });
 
+    console.log('Paystack response:', response);
     return response;
   } catch (error) {
     console.error('Paystack initialization error:', error);
-    throw new Error('Payment initialization failed');
+    console.error('Error details:', {
+      message: error.message,
+      response: error.response?.data,
+      status: error.response?.status
+    });
+    throw new Error(`Payment initialization failed: ${error.message}`);
   }
 };
 

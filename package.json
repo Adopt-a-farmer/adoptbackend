@@ -24,7 +24,7 @@
     "dotenv": "^16.3.1",
     "bcryptjs": "^2.4.3",
     "jsonwebtoken": "^9.0.2",
-    "multer": "^1.4.5-lts.1",
+    "multer": "^2.0.2",
     "cloudinary": "^1.41.0",
     "multer-storage-cloudinary": "^4.0.0",
     "paystack": "^2.0.1",

@@ -14,7 +14,10 @@ const {
   getFarmerSettings,
   updateFarmerSettings,
   changeFarmerPassword,
-  getFarmerExperts
+  getFarmerExperts,
+  getFarmerConversations,
+  getFarmerMessagingStats,
+  getFarmerAdopterConversations
 } = require('../controllers/farmerController');
 const { protect, authorize } = require('../middleware/auth');
 const { validateFarmerProfile, validateFarmerProfilePartial, validate } = require('../middleware/validation');
@@ -67,11 +70,8 @@ router.put('/settings', protect, authorize('farmer'), updateFarmerSettings);
 router.get('/experts', protect, authorize('farmer'), getFarmerExperts);
 
 // Message/conversation routes for farmers
-router.get('/conversations', protect, authorize('farmer'), async (req, res) => {
-  // Delegate to message controller
-  const { getConversations } = require('../controllers/messageController');
-  getConversations(req, res);
-});
+router.get('/conversations', protect, authorize('farmer'), getFarmerConversations);
+router.get('/messaging-stats', protect, authorize('farmer'), getFarmerMessagingStats);
 
 router.get('/messages/unread-count', protect, authorize('farmer'), async (req, res) => {
   // Delegate to message controller
@@ -115,6 +115,7 @@ router.post('/availability', protect, authorize('farmer'), async (req, res) => {
 router.get('/settings', protect, authorize('farmer'), getFarmerSettings);
 router.put('/settings', protect, authorize('farmer'), updateFarmerSettings);
 router.put('/change-password', protect, authorize('farmer'), changeFarmerPassword);
+router.get('/conversations/adopters', protect, authorize('farmer'), getFarmerAdopterConversations);
 
 // Admin cleanup route
 router.post('/cleanup-profiles', protect, authorize('admin'), async (req, res) => {
