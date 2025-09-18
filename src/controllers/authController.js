@@ -9,7 +9,7 @@ const { generateToken, generateRefreshToken, verifyRefreshToken } = require('../
 // @access  Public
 const register = async (req, res) => {
   try {
-    const { firstName, lastName, email, password, role, phone, farmerProfile } = req.body;
+    const { firstName, lastName, email, password, role, phone, avatar, farmerProfile, profileImage } = req.body;
 
     console.log('🚀 Registration attempt:', {
       email,
@@ -17,6 +17,8 @@ const register = async (req, res) => {
       firstName,
       lastName,
       phone: phone || 'not provided',
+      avatar: avatar ? 'provided' : 'not provided',
+      profileImage: profileImage ? 'provided' : 'not provided',
       hasDetailedProfile: !!farmerProfile
     });
 
@@ -30,27 +32,53 @@ const register = async (req, res) => {
       });
     }
 
-    // Create user
-    const user = await User.create({
+    // Create user with avatar if provided
+    const userData = {
       firstName,
       lastName,
       email,
       password,
       role,
       phone
-    });
+    };
+
+    // Auto-verify admin users
+    if (role === 'admin') {
+      userData.isVerified = true;
+      userData.isEmailVerified = true;
+      userData.verificationStatus = 'verified';
+    }
+
+    // Add avatar if provided
+    if (avatar) {
+      userData.avatar = {
+        url: avatar,
+        publicId: '' // You might want to extract this from the avatar URL if needed
+      };
+    }
+
+    // Add profile image from upload if provided
+    if (profileImage) {
+      userData.avatar = {
+        url: profileImage.url || profileImage,
+        publicId: profileImage.publicId || ''
+      };
+    }
+
+    const user = await User.create(userData);
 
     console.log('✅ User created successfully:', {
       id: user._id,
       email: user.email,
-      role: user.role
+      role: user.role,
+      hasAvatar: !!user.avatar?.url
     });
 
     // Create role-specific profile
     if (role === 'farmer') {
       const profileData = {
         user: user._id,
-        verificationStatus: 'verified', // Auto-verify new farmers
+        verificationStatus: 'pending', // Farmers need admin verification
         isActive: true
       };
 
@@ -89,6 +117,18 @@ const register = async (req, res) => {
           livestock: [],
           certifications: []
         });
+
+        // Add profile image to farmer profile if provided
+        if (profileImage) {
+          profileData.media = {
+            profileImage: {
+              url: profileImage.url || profileImage,
+              publicId: profileImage.publicId || ''
+            },
+            farmImages: [],
+            videos: []
+          };
+        }
       } else {
         // Default profile data
         Object.assign(profileData, {
@@ -109,6 +149,18 @@ const register = async (req, res) => {
           livestock: [],
           certifications: []
         });
+
+        // Add profile image to default farmer profile if provided
+        if (profileImage) {
+          profileData.media = {
+            profileImage: {
+              url: profileImage.url || profileImage,
+              publicId: profileImage.publicId || ''
+            },
+            farmImages: [],
+            videos: []
+          };
+        }
       }
 
       await FarmerProfile.create(profileData);
@@ -126,7 +178,7 @@ const register = async (req, res) => {
       });
       console.log('✅ AdopterProfile created for user:', user._id);
     } else if (role === 'expert') {
-      const expertProfile = await ExpertProfile.create({
+      const expertProfileData = {
         user: user._id,
         bio: '',
         specializations: [],
@@ -153,8 +205,20 @@ const register = async (req, res) => {
           county: '',
           subCounty: '',
           serviceRadius: 50
-        }
-      });
+        },
+        verificationStatus: 'pending', // Experts need admin verification
+        verificationDocuments: []
+      };
+
+      // Add profile image if provided
+      if (profileImage) {
+        expertProfileData.profileImage = {
+          url: profileImage.url || profileImage,
+          publicId: profileImage.publicId || ''
+        };
+      }
+
+      const expertProfile = await ExpertProfile.create(expertProfileData);
       console.log('✅ ExpertProfile created for user:', user._id, 'Profile ID:', expertProfile._id);
     }
 
@@ -240,6 +304,45 @@ const login = async (req, res) => {
     }
 
     console.log('✅ Password verified for:', email);
+
+    // Check email verification (skip for admin users)
+    if (!user.isEmailVerified && user.role !== 'admin') {
+      console.log('⚠️ Login blocked: Email not verified for:', email);
+      
+      // Generate new OTP for unverified user using shared utility
+      const { storeOTP } = require('../utils/otpUtils');
+      const { token, otp } = storeOTP(user.email, {
+        userId: user._id,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        phone: user.phone,
+        role: user.role
+      });
+
+      console.log('📧 Auto-generating OTP for unverified user:', {
+        email,
+        otp: `${otp.substring(0, 2)}****`
+      });
+
+      // Send response that triggers frontend to redirect to OTP page
+      return res.status(403).json({
+        success: false,
+        requiresVerification: true,
+        message: 'Email verification required. Please check your email for the verification code.',
+        email: user.email,
+        token,
+        redirectTo: '/verify-email',
+        ...(process.env.USE_MOCK_EMAIL === 'true' && { 
+          developmentOTP: otp,
+          note: 'This OTP is shown because USE_MOCK_EMAIL is enabled' 
+        })
+      });
+    }
+
+    // Log admin bypass
+    if (!user.isEmailVerified && user.role === 'admin') {
+      console.log('🔑 Admin user bypassing email verification:', email);
+    }
 
     // Generate tokens
     const token = generateToken(user._id);

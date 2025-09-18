@@ -19,6 +19,9 @@ const {
   getFarmerMessagingStats,
   getFarmerAdopterConversations
 } = require('../controllers/farmerController');
+const {
+  getFarmerContributions
+} = require('../controllers/contributionController');
 const { protect, authorize } = require('../middleware/auth');
 const { validateFarmerProfile, validateFarmerProfilePartial, validate } = require('../middleware/validation');
 const { cleanupFarmerProfiles } = require('../utils/cleanupFarmerProfiles');
@@ -139,6 +142,9 @@ router.post('/cleanup-profiles', protect, authorize('admin'), async (req, res) =
 router.post('/images', protect, authorize('farmer'), upload.array('images', 10), uploadFarmImages);
 router.post('/videos', protect, authorize('farmer'), upload.single('video'), uploadFarmVideos);
 router.delete('/media/:publicId', protect, authorize('farmer'), deleteFarmMedia);
+
+// Contribution routes for farmers
+router.get('/contributions', protect, authorize('farmer'), getFarmerContributions);
 
 // Parametric routes - MUST come last
 router.get('/:id', getFarmerById);

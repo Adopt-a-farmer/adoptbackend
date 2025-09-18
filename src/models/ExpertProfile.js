@@ -149,6 +149,10 @@ const expertProfileSchema = new mongoose.Schema({
       default: 1
     }
   },
+  profileImage: {
+    url: String,
+    publicId: String
+  },
   verificationStatus: {
     type: String,
     enum: ['pending', 'verified', 'rejected'],

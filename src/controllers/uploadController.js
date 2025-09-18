@@ -1,4 +1,5 @@
 const { uploadImage, uploadVideo, deleteFile, createImageVariants } = require('../utils/cloudinaryUtils');
+const cloudinary = require('../config/cloudinary');
 const fs = require('fs').promises;
 
 // @desc    Upload single image
@@ -249,10 +250,155 @@ const getUploadSignature = async (req, res) => {
   }
 };
 
+// @desc    Upload profile image for farmer registration
+// @route   POST /api/upload/profile-image
+// @access  Private
+const uploadProfileImage = async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({
+        success: false,
+        message: 'No image file provided'
+      });
+    }
+
+    const folder = 'adopt-a-farmer/profile-images';
+    const result = await uploadImage(req.file, folder);
+
+    // Create image variants for profile use
+    const variants = createImageVariants(result.publicId);
+
+    // Clean up temp file
+    try {
+      await fs.unlink(req.file.path);
+    } catch (error) {
+      console.log('Temp file cleanup failed:', error.message);
+    }
+
+    res.json({
+      success: true,
+      message: 'Profile image uploaded successfully',
+      data: {
+        url: result.url,
+        secure_url: result.url, // Adding secure_url for compatibility
+        publicId: result.publicId,
+        format: result.format,
+        width: result.width,
+        height: result.height,
+        bytes: result.bytes,
+        variants
+      }
+    });
+  } catch (error) {
+    // Clean up temp file on error
+    if (req.file && req.file.path) {
+      try {
+        await fs.unlink(req.file.path);
+      } catch (unlinkError) {
+        console.log('Temp file cleanup failed:', unlinkError.message);
+      }
+    }
+
+    console.error('Upload profile image error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Profile image upload failed'
+    });
+  }
+};
+
+// @desc    Upload expert verification documents
+// @route   POST /api/upload/expert-documents
+// @access  Private (Expert)
+const uploadExpertDocuments = async (req, res) => {
+  try {
+    if (!req.files || req.files.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'No document files provided'
+      });
+    }
+
+    const { documentTypes } = req.body; // Array of document types corresponding to files
+    
+    if (!documentTypes || !Array.isArray(documentTypes)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Document types must be provided as an array'
+      });
+    }
+
+    if (documentTypes.length !== req.files.length) {
+      return res.status(400).json({
+        success: false,
+        message: 'Number of document types must match number of files'
+      });
+    }
+
+    const allowedDocTypes = ['degree', 'certificate', 'license', 'id', 'cv', 'portfolio'];
+    const invalidTypes = documentTypes.filter(type => !allowedDocTypes.includes(type));
+    
+    if (invalidTypes.length > 0) {
+      return res.status(400).json({
+        success: false,
+        message: `Invalid document types: ${invalidTypes.join(', ')}`
+      });
+    }
+
+    const folder = 'adopt-a-farmer/expert-documents';
+    const uploadPromises = req.files.map(file => uploadImage(file, folder));
+    const results = await Promise.all(uploadPromises);
+
+    // Format results with document types
+    const documents = results.map((result, index) => ({
+      type: documentTypes[index],
+      url: result.url,
+      publicId: result.publicId,
+      fileName: req.files[index].originalname,
+      uploadDate: new Date(),
+      status: 'pending'
+    }));
+
+    // Clean up temp files
+    const cleanupPromises = req.files.map(file => 
+      fs.unlink(file.path).catch(error => 
+        console.log('Temp file cleanup failed:', error.message)
+      )
+    );
+    await Promise.all(cleanupPromises);
+
+    res.json({
+      success: true,
+      message: `${results.length} documents uploaded successfully`,
+      data: {
+        documents
+      }
+    });
+  } catch (error) {
+    // Clean up temp files on error
+    if (req.files) {
+      const cleanupPromises = req.files.map(file => 
+        fs.unlink(file.path).catch(unlinkError => 
+          console.log('Temp file cleanup failed:', unlinkError.message)
+        )
+      );
+      await Promise.all(cleanupPromises);
+    }
+
+    console.error('Upload expert documents error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Documents upload failed'
+    });
+  }
+};
+
 module.exports = {
   uploadSingleImage,
   uploadMultipleImages,
   uploadSingleVideo,
   deleteUploadedFile,
-  getUploadSignature
+  getUploadSignature,
+  uploadProfileImage,
+  uploadExpertDocuments
 };
