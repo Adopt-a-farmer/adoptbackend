@@ -11,7 +11,10 @@ const {
   getInvestorFarmerRelationships,
   getExpertConversations,
   getExpertFarmVisits,
-  createMentorship
+  createMentorship,
+  uploadVerificationDocuments,
+  getVerificationDocuments,
+  removeVerificationDocument
 } = require('../controllers/expertController');
 const { protect, authorize } = require('../middleware/auth');
 const { validate, validateProfileUpdate } = require('../middleware/validation');
@@ -51,5 +54,10 @@ router.get('/conversations', getExpertConversations);
 
 // Farm visits routes
 router.get('/visits', getExpertFarmVisits);
+
+// Document verification routes
+router.post('/upload-documents', uploadVerificationDocuments);
+router.get('/verification-documents', getVerificationDocuments);
+router.delete('/verification-documents/:documentId', removeVerificationDocument);
 
 module.exports = router;

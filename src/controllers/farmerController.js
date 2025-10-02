@@ -508,6 +508,15 @@ const getFarmerDashboard = async (req, res) => {
       .reduce((sum, w) => sum + w.amount, 0);
     const availableBalance = Math.max(0, totalEarnings - totalWithdrawn - pendingWithdrawals);
 
+    // Calculate adopter satisfaction from visit feedback ratings
+    const completedVisitsWithFeedback = visits.filter(v => 
+      v.status === 'completed' && 
+      v.feedback?.rating
+    );
+    const adopterSatisfaction = completedVisitsWithFeedback.length > 0
+      ? Math.round(completedVisitsWithFeedback.reduce((sum, v) => sum + v.feedback.rating, 0) / completedVisitsWithFeedback.length * 20) // Convert 5-star to percentage
+      : 0;
+
     // Calculate comprehensive statistics
     const stats = {
       totalAdopters: adoptions.filter(a => a.status === 'active').length,
@@ -522,8 +531,10 @@ const getFarmerDashboard = async (req, res) => {
       totalVisits: visits.length,
       pendingVisitRequests: visits.filter(v => v.status === 'requested').length,
       confirmedVisits: visits.filter(v => v.status === 'confirmed').length,
+      completedVisits: visits.filter(v => v.status === 'completed').length,
       unreadMessages: unreadMessages,
-      monthlyGoalProgress: 65 // Mock data - could be calculated based on targets
+      monthlyGoalProgress: adoptions.length > 0 ? Math.min(100, Math.round((adoptions.filter(a => a.status === 'active').length / Math.max(adoptions.length, 1)) * 100)) : 0,
+      adopterSatisfaction: adopterSatisfaction
     };
 
     // Recent activity feed
@@ -804,6 +815,30 @@ const getFarmerReports = async (req, res) => {
       });
     }
 
+    // Calculate growth rate by comparing with previous period
+    const prevPeriodStart = new Date(startDate);
+    let prevPeriodEnd = startDate;
+    
+    switch (period) {
+      case 'quarter':
+        prevPeriodStart.setMonth(prevPeriodStart.getMonth() - 3);
+        break;
+      case 'year':
+        prevPeriodStart.setFullYear(prevPeriodStart.getFullYear() - 1);
+        break;
+      default: // month
+        prevPeriodStart.setMonth(prevPeriodStart.getMonth() - 1);
+    }
+    
+    const prevPeriodPayments = await Payment.find({
+      'metadata.farmerName': farmer.farmName,
+      status: 'success',
+      createdAt: { $gte: prevPeriodStart, $lt: prevPeriodEnd }
+    });
+    
+    const prevRevenue = prevPeriodPayments.reduce((sum, p) => sum + p.netAmount, 0);
+    const growthRate = prevRevenue > 0 ? ((totalRevenue - prevRevenue) / prevRevenue * 100) : (totalRevenue > 0 ? 100 : 0);
+
     const reports = {
       period,
       dateRange: { startDate, endDate: now },
@@ -813,7 +848,7 @@ const getFarmerReports = async (req, res) => {
         totalUpdates: farmUpdates.length,
         totalVisits: visits.length,
         avgRevenuePerAdopter,
-        growthRate: 12.5 // Mock data - would calculate based on previous period
+        growthRate: Math.round(growthRate * 10) / 10 // Round to 1 decimal place
       },
       revenueBreakdown: revenueBreakdown.filter(r => r.revenue > 0),
       adoptionBreakdown: adoptionBreakdown.filter(a => a.adoptions > 0),

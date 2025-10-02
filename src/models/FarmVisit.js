@@ -4,7 +4,17 @@ const farmVisitSchema = new mongoose.Schema({
   adopter: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
-    required: true
+    // Not required anymore - will use visitor field instead
+  },
+  visitor: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    // Generic visitor field to support both adopters and experts
+  },
+  visitorRole: {
+    type: String,
+    enum: ['adopter', 'expert'],
+    // Track the role of the visitor
   },
   farmer: {
     type: mongoose.Schema.Types.ObjectId,
@@ -191,6 +201,7 @@ const farmVisitSchema = new mongoose.Schema({
 
 // Indexes for better query performance
 farmVisitSchema.index({ adopter: 1, status: 1 });
+farmVisitSchema.index({ visitor: 1, status: 1 });
 farmVisitSchema.index({ farmer: 1, status: 1 });
 farmVisitSchema.index({ adoption: 1 });
 farmVisitSchema.index({ requestedDate: 1, status: 1 });

@@ -1,6 +1,29 @@
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
 
+// Helper function to validate JWT token format
+const isValidJWT = (token) => {
+  if (!token || typeof token !== 'string') return false;
+  if (token === 'null' || token === 'undefined') return false;
+  if (token.trim() === '') return false;
+  
+  // JWT should have 3 parts separated by dots
+  const parts = token.split('.');
+  if (parts.length !== 3) return false;
+  
+  // Each part should be base64 encoded
+  try {
+    parts.forEach(part => {
+      if (!part || part.length === 0) throw new Error('Empty part');
+      // Try to decode the base64
+      Buffer.from(part, 'base64');
+    });
+    return true;
+  } catch (error) {
+    return false;
+  }
+};
+
 // Protect routes - verify JWT token
 const protect = async (req, res, next) => {
   let token;
@@ -13,6 +36,18 @@ const protect = async (req, res, next) => {
       // Get token from header
       token = req.headers.authorization.split(' ')[1];
       console.log('Token received:', token ? 'Token present' : 'Token missing');
+      console.log('Token length:', token ? token.length : 0);
+      console.log('Token starts with:', token ? token.substring(0, 20) : 'N/A');
+      console.log('Raw auth header:', req.headers.authorization);
+
+      // Validate JWT token format before attempting verification
+      if (!isValidJWT(token)) {
+        console.error('Invalid JWT token format detected:', token);
+        return res.status(401).json({
+          success: false,
+          message: 'Invalid token format'
+        });
+      }
 
       // Verify token
       const decoded = jwt.verify(token, process.env.JWT_SECRET);
@@ -111,8 +146,14 @@ const optionalAuth = async (req, res, next) => {
   ) {
     try {
       token = req.headers.authorization.split(' ')[1];
-      const decoded = jwt.verify(token, process.env.JWT_SECRET);
-      req.user = await User.findById(decoded.id).select('-password');
+      
+      // Only proceed if token is valid format
+      if (isValidJWT(token)) {
+        const decoded = jwt.verify(token, process.env.JWT_SECRET);
+        req.user = await User.findById(decoded.id).select('-password');
+      } else {
+        req.user = null;
+      }
     } catch (error) {
       // Token exists but is invalid - continue without user
       req.user = null;

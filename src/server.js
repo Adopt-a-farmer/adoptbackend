@@ -1,4 +1,5 @@
 const express = require('express');
+const path = require('path');
 const cors = require('cors');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
@@ -23,6 +24,9 @@ const visitRoutes = require('./routes/visits');
 const adminRoutes = require('./routes/admin');
 const walletRoutes = require('./routes/wallet');
 const farmUpdatesRoutes = require('./routes/farmUpdates');
+const aiRoutes = require('./routes/aiRoutes');
+const geolocationRoutes = require('./routes/geolocationRoutes');
+const reportRoutes = require('./routes/reportRoutes');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -86,6 +90,18 @@ app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 app.use(logger);
 
+// Serve static files
+app.use(express.static('public'));
+
+// Admin routes
+app.get('/admin/login', (req, res) => {
+  res.sendFile(path.join(__dirname, '../public/admin/login.html'));
+});
+
+app.get('/admin/dashboard', (req, res) => {
+  res.sendFile(path.join(__dirname, '../public/admin/dashboard.html'));
+});
+
 // Health check endpoint
 app.get('/health', (req, res) => {
   res.status(200).json({
@@ -110,6 +126,9 @@ app.use('/api/visits', visitRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/wallet', walletRoutes);
 app.use('/api/farm-updates', farmUpdatesRoutes);
+app.use('/api/ai', aiRoutes);
+app.use('/api/geolocation', geolocationRoutes);
+app.use('/api/reports', reportRoutes);
 
 // 404 handler
 app.use('*', (req, res) => {

@@ -17,9 +17,9 @@ const { protect, authorize } = require('../middleware/auth');
 router.get('/', protect, getFarmVisits);
 router.get('/stats', protect, getVisitStats);
 // Place specific routes before parametric routes
-router.post('/', protect, authorize('adopter'), scheduleFarmVisit);
+router.post('/', protect, authorize(['adopter', 'expert']), scheduleFarmVisit);
 router.put('/:id/status', protect, updateVisitStatus);
-router.post('/:id/feedback', protect, authorize('adopter'), addVisitFeedback);
+router.post('/:id/feedback', protect, authorize(['adopter', 'expert']), addVisitFeedback);
 
 // Availability routes
 router.get('/farmer/:farmerId/availability', getFarmerAvailability);

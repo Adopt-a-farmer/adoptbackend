@@ -9,6 +9,14 @@ const {
   changePassword,
   updateProfile
 } = require('../controllers/authController');
+const {
+  sendOTP,
+  verifyOTP,
+  completeSignup,
+  resendOTP,
+  testEmail,
+  testDatabase
+} = require('../controllers/otpController');
 const { protect } = require('../middleware/auth');
 const {
   validateRegister,
@@ -18,6 +26,7 @@ const {
 } = require('../middleware/validation');
 const { debugExpertUsers, fixUserRole } = require('../utils/debugExpertUsers');
 const { debugSpecificUser } = require('../utils/debugUserRole');
+const { checkVerificationStatus, getVerificationStatus } = require('../middleware/verification');
 
 const router = express.Router();
 
@@ -40,6 +49,7 @@ router.post('/refresh', refreshToken);
 
 // Protected routes
 router.get('/me', protect, getMe);
+router.get('/verification-status', protect, checkVerificationStatus, getVerificationStatus);
 router.get('/debug', protect, (req, res) => {
   console.log('🔍 Debug endpoint called');
   console.log('User data:', {
@@ -116,5 +126,17 @@ router.get('/debug-user/:userId', async (req, res) => {
 router.put('/me', protect, updateProfile);
 router.post('/logout', protect, logout);
 router.put('/change-password', protect, validatePasswordChange, validate, changePassword);
+
+// OTP routes for new signup flow
+router.post('/send-otp', sendOTP);
+router.post('/verify-otp', verifyOTP);
+router.post('/resend-otp', resendOTP);
+router.post('/complete-signup', completeSignup);
+
+// Test email configuration (development only)
+if (process.env.NODE_ENV !== 'production') {
+  router.get('/test-email', testEmail);
+  router.get('/test-database', testDatabase);
+}
 
 module.exports = router;

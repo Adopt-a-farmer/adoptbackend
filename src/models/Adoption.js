@@ -4,16 +4,24 @@ const adoptionSchema = new mongoose.Schema({
   adopter: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
-    required: true
+    required: true,
+    // One adopter can only adopt one farmer at a time
+    unique: function() {
+      return this.status === 'active';
+    }
   },
   farmer: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
-    required: true
+    required: true,
+    // One farmer can only be adopted by one adopter at a time
+    unique: function() {
+      return this.status === 'active';
+    }
   },
   adoptionType: {
     type: String,
-    enum: ['full', 'partial', 'crop_specific', 'livestock_specific', 'monthly_support'],
+    enum: ['full', 'partial', 'crop_specific', 'monthly_support'],
     required: [true, 'Adoption type is required']
   },
   adoptionDetails: {
@@ -21,11 +29,6 @@ const adoptionSchema = new mongoose.Schema({
       name: String,
       area: Number, // in acres or hectares
       expectedYield: Number,
-      pricePerUnit: Number
-    }],
-    livestock: [{
-      type: String,
-      count: Number,
       pricePerUnit: Number
     }],
     duration: {
@@ -149,5 +152,53 @@ const adoptionSchema = new mongoose.Schema({
 adoptionSchema.index({ adopter: 1, status: 1 });
 adoptionSchema.index({ farmer: 1, status: 1 });
 adoptionSchema.index({ status: 1, 'adoptionDetails.duration.end': 1 });
+
+// Ensure one-to-one adoption: one adopter, one farmer
+adoptionSchema.index(
+  { adopter: 1, status: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { status: 'active' },
+    name: 'one_adopter_one_farmer'
+  }
+);
+
+// Ensure one farmer can only have one active adoption
+adoptionSchema.index(
+  { farmer: 1, status: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { status: 'active' },
+    name: 'one_farmer_one_adopter'
+  }
+);
+
+// Pre-save validation for one-to-one adoption
+adoptionSchema.pre('save', async function(next) {
+  if (this.status === 'active') {
+    // Check if adopter already has an active adoption
+    const existingAdopterAdoption = await this.constructor.findOne({
+      adopter: this.adopter,
+      status: 'active',
+      _id: { $ne: this._id }
+    });
+
+    if (existingAdopterAdoption) {
+      throw new Error('This adopter already has an active adoption. One adopter can only adopt one farmer at a time.');
+    }
+
+    // Check if farmer already has an active adoption
+    const existingFarmerAdoption = await this.constructor.findOne({
+      farmer: this.farmer,
+      status: 'active',
+      _id: { $ne: this._id }
+    });
+
+    if (existingFarmerAdoption) {
+      throw new Error('This farmer is already adopted. One farmer can only have one adopter at a time.');
+    }
+  }
+  next();
+});
 
 module.exports = mongoose.model('Adoption', adoptionSchema);

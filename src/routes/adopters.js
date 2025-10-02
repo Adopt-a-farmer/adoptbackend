@@ -15,6 +15,10 @@ const {
   checkAdoptionStatus,
   getAdopterFarmerConversations
 } = require('../controllers/adopterController');
+const {
+  makeContribution,
+  getContributionHistory
+} = require('../controllers/contributionController');
 const { protect, authorize } = require('../middleware/auth');
 
 const router = express.Router();
@@ -36,6 +40,10 @@ router.get('/visits', getVisits);
 router.get('/analytics', getInvestmentAnalytics);
 router.get('/adoptions/check/:farmerId', checkAdoptionStatus);
 router.get('/conversations/farmers', getAdopterFarmerConversations);
+
+// Contribution routes
+router.post('/contribute', makeContribution);
+router.get('/contributions', getContributionHistory);
 
 // Mentoring routes
 router.get('/mentoring', getMentoringFarmers);

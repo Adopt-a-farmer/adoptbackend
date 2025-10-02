@@ -17,7 +17,15 @@ const getFarmVisits = async (req, res) => {
         filter.farmer = req.user._id; // Use user ID directly for farmer visits
       }
     } else if (req.user.role === 'adopter') {
-      filter.adopter = req.user._id;
+      // Show visits where user is adopter or visitor
+      filter.$or = [
+        { adopter: req.user._id },
+        { visitor: req.user._id, visitorRole: 'adopter' }
+      ];
+    } else if (req.user.role === 'expert') {
+      // Show visits where expert is the visitor
+      filter.visitor = req.user._id;
+      filter.visitorRole = 'expert';
     }
 
     // Additional filters
@@ -41,6 +49,7 @@ const getFarmVisits = async (req, res) => {
 
     const visits = await FarmVisit.find(filter)
       .populate('adopter', 'firstName lastName email phone avatar')
+      .populate('visitor', 'firstName lastName email phone avatar role')
       .populate('farmer', 'firstName lastName email phone')
       .populate('adoption', 'status duration')
       .sort({ requestedDate: 1 });
@@ -104,13 +113,13 @@ const getFarmVisit = async (req, res) => {
 
 // @desc    Schedule farm visit
 // @route   POST /api/visits
-// @access  Private (Adopter only)
+// @access  Private (Adopter or Expert)
 const scheduleFarmVisit = async (req, res) => {
   try {
-    if (req.user.role !== 'adopter') {
+    if (!['adopter', 'expert'].includes(req.user.role)) {
       return res.status(403).json({
         success: false,
-        message: 'Only adopters can schedule farm visits'
+        message: 'Only adopters and experts can schedule farm visits'
       });
     }
 
@@ -143,7 +152,8 @@ const scheduleFarmVisit = async (req, res) => {
     }
 
     const visitData = {
-      adopter: req.user._id,
+      visitor: req.user._id, // Use visitor instead of adopter for both roles
+      visitorRole: req.user.role, // Track visitor role
       farmer: farmerId, // Use farmer user ID
       requestedDate: new Date(requestedDate),
       duration: duration || 'half_day',
@@ -156,11 +166,16 @@ const scheduleFarmVisit = async (req, res) => {
       status: 'requested'
     };
 
+    // For backwards compatibility, still set adopter field
+    if (req.user.role === 'adopter') {
+      visitData.adopter = req.user._id;
+    }
+
     const visit = await FarmVisit.create(visitData);
 
     // Populate the created visit
     await visit.populate([
-      { path: 'adopter', select: 'firstName lastName email phone' },
+      { path: 'visitor', select: 'firstName lastName email phone role' },
       { path: 'farmer', select: 'firstName lastName email phone' }
     ]);
 

@@ -167,6 +167,17 @@ const farmerProfileSchema = new mongoose.Schema({
     enum: ['pending', 'verified', 'rejected'],
     default: 'pending'
   },
+  verificationNotes: {
+    type: String,
+    maxlength: [500, 'Verification notes cannot exceed 500 characters']
+  },
+  verifiedAt: {
+    type: Date
+  },
+  verifiedBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User'
+  },
   rating: {
     average: {
       type: Number,

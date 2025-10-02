@@ -5,9 +5,11 @@ const {
   uploadMultipleImages,
   uploadSingleVideo,
   deleteUploadedFile,
-  getUploadSignature
+  getUploadSignature,
+  uploadProfileImage,
+  uploadExpertDocuments
 } = require('../controllers/uploadController');
-const { protect } = require('../middleware/auth');
+const { protect, authorize } = require('../middleware/auth');
 
 const router = express.Router();
 
@@ -50,7 +52,11 @@ router.use(protect);
 // Image upload routes
 router.post('/single', upload.single('image'), uploadSingleImage); // Add the missing /single route
 router.post('/image', upload.single('image'), uploadSingleImage);
+router.post('/profile-image', upload.single('image'), uploadProfileImage);
 router.post('/images', upload.array('images', 10), uploadMultipleImages);
+
+// Expert document upload route
+router.post('/expert-documents', authorize(['expert']), upload.array('documents', 5), uploadExpertDocuments);
 
 // Video upload route
 router.post('/video', upload.single('video'), uploadSingleVideo);

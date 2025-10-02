@@ -85,7 +85,7 @@ const getExpertDashboard = async (req, res) => {
 
     // Get platform stats
     const [totalFarmers, totalAdopters, totalInvestorFarmerPairs] = await Promise.all([
-      User.countDocuments({ role: 'farmer' }),
+      FarmerProfile.countDocuments({ verificationStatus: 'verified' }),
       User.countDocuments({ role: 'adopter' }),
       Adoption.countDocuments({ status: 'active' })
     ]);
@@ -753,7 +753,8 @@ const getExpertFarmVisits = async (req, res) => {
 
     const filter = {
       $or: [
-        { adopter: expertId }, // Expert as visitor
+        { visitor: expertId, visitorRole: 'expert' }, // Expert as visitor (new field)
+        { adopter: expertId }, // Legacy field for backwards compatibility
         { farmer: { $in: farmerProfileIds } } // Visits to farmers expert mentors
       ]
     };
@@ -772,6 +773,7 @@ const getExpertFarmVisits = async (req, res) => {
 
     const visits = await FarmVisit.find(filter)
       .populate('adopter', 'firstName lastName avatar email')
+      .populate('visitor', 'firstName lastName avatar email role')
       .populate({
         path: 'farmer',
         populate: {
@@ -865,6 +867,148 @@ const createMentorship = async (req, res) => {
   }
 };
 
+// @desc    Upload verification documents for expert
+// @route   POST /api/experts/upload-documents
+// @access  Private (Expert only)
+const uploadVerificationDocuments = async (req, res) => {
+  try {
+    const expertId = req.user._id;
+    const { documents } = req.body; // Array of document objects from upload
+
+    if (!documents || !Array.isArray(documents) || documents.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'No documents provided'
+      });
+    }
+
+    // Find expert profile
+    const expertProfile = await ExpertProfile.findOne({ user: expertId });
+    if (!expertProfile) {
+      return res.status(404).json({
+        success: false,
+        message: 'Expert profile not found'
+      });
+    }
+
+    // Add documents to expert profile
+    documents.forEach(doc => {
+      expertProfile.verificationDocuments.push({
+        type: doc.type,
+        url: doc.url,
+        publicId: doc.publicId,
+        fileName: doc.fileName,
+        uploadDate: new Date(),
+        status: 'pending'
+      });
+    });
+
+    // Set verification status to pending if documents are uploaded
+    if (expertProfile.verificationStatus === 'pending' && expertProfile.verificationDocuments.length > 0) {
+      expertProfile.verificationStatus = 'pending';
+    }
+
+    await expertProfile.save();
+
+    res.json({
+      success: true,
+      message: 'Documents uploaded successfully',
+      data: {
+        documents: expertProfile.verificationDocuments.slice(-documents.length) // Return newly added documents
+      }
+    });
+  } catch (error) {
+    console.error('Upload verification documents error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error'
+    });
+  }
+};
+
+// @desc    Get expert verification documents
+// @route   GET /api/experts/verification-documents
+// @access  Private (Expert only)
+const getVerificationDocuments = async (req, res) => {
+  try {
+    const expertId = req.user._id;
+
+    const expertProfile = await ExpertProfile.findOne({ user: expertId })
+      .select('verificationDocuments verificationStatus verificationNotes');
+
+    if (!expertProfile) {
+      return res.status(404).json({
+        success: false,
+        message: 'Expert profile not found'
+      });
+    }
+
+    res.json({
+      success: true,
+      data: {
+        documents: expertProfile.verificationDocuments,
+        verificationStatus: expertProfile.verificationStatus,
+        verificationNotes: expertProfile.verificationNotes
+      }
+    });
+  } catch (error) {
+    console.error('Get verification documents error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error'
+    });
+  }
+};
+
+// @desc    Remove verification document
+// @route   DELETE /api/experts/verification-documents/:documentId
+// @access  Private (Expert only)
+const removeVerificationDocument = async (req, res) => {
+  try {
+    const expertId = req.user._id;
+    const { documentId } = req.params;
+
+    const expertProfile = await ExpertProfile.findOne({ user: expertId });
+    if (!expertProfile) {
+      return res.status(404).json({
+        success: false,
+        message: 'Expert profile not found'
+      });
+    }
+
+    const documentIndex = expertProfile.verificationDocuments.findIndex(
+      doc => doc._id.toString() === documentId
+    );
+
+    if (documentIndex === -1) {
+      return res.status(404).json({
+        success: false,
+        message: 'Document not found'
+      });
+    }
+
+    // Remove document from array
+    const removedDoc = expertProfile.verificationDocuments[documentIndex];
+    expertProfile.verificationDocuments.splice(documentIndex, 1);
+
+    await expertProfile.save();
+
+    // TODO: Delete from cloudinary if needed
+    // await deleteFile(removedDoc.publicId);
+
+    res.json({
+      success: true,
+      message: 'Document removed successfully'
+    });
+  } catch (error) {
+    console.error('Remove verification document error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error'
+    });
+  }
+};
+
 module.exports = {
   getExpertDashboard,
   getExpertArticles,
@@ -876,5 +1020,8 @@ module.exports = {
   getInvestorFarmerRelationships,
   getExpertConversations,
   getExpertFarmVisits,
-  createMentorship
+  createMentorship,
+  uploadVerificationDocuments,
+  getVerificationDocuments,
+  removeVerificationDocument
 };

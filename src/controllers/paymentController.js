@@ -145,6 +145,8 @@ const verifyPaymentController = async (req, res) => {
     const { reference } = req.body;
     const userId = req.user._id;
 
+    console.log('Payment verification request:', { reference, userId });
+
     // Find payment record
     const payment = await Payment.findOne({
       'gatewayResponse.reference': reference,
@@ -160,10 +162,12 @@ const verifyPaymentController = async (req, res) => {
 
     // Verify with Paystack
     const verification = await verifyPayment(reference);
+    console.log('Paystack verification response:', verification);
 
-    if (!verification.status) {
+    // Check if verification was successful (status code 200 and status: true)
+    if (!verification.status || !verification.data) {
       payment.status = 'failed';
-      payment.failureReason = verification.message;
+      payment.failureReason = verification.message || 'Payment verification failed';
       await payment.save();
 
       return res.status(400).json({
@@ -175,8 +179,18 @@ const verifyPaymentController = async (req, res) => {
 
     const verificationData = verification.data;
 
-    // Update payment record
-    payment.status = verificationData.status === 'success' ? 'success' : 'failed';
+    // CRITICAL: Only process payment if Paystack returns success status
+    // Paystack returns status: 'success' for successful payments
+    const isPaymentSuccessful = verificationData.status === 'success';
+    
+    console.log('Payment verification status:', {
+      paystackStatus: verificationData.status,
+      isSuccessful: isPaymentSuccessful,
+      amount: verificationData.amount,
+      currency: verificationData.currency
+    });
+
+    // Update payment record with verification details
     payment.gatewayResponse = {
       ...payment.gatewayResponse,
       gatewayRef: verificationData.reference,
@@ -189,36 +203,63 @@ const verifyPaymentController = async (req, res) => {
       expYear: verificationData.authorization?.exp_year,
       countryCode: verificationData.authorization?.country_code,
       brand: verificationData.authorization?.brand,
-      reusable: verificationData.authorization?.reusable
+      reusable: verificationData.authorization?.reusable,
+      verificationResponse: verificationData // Store full verification response
     };
 
-    if (payment.status === 'success') {
-      payment.paidAt = new Date(verificationData.paid_at);
+    // Only mark as success and process if Paystack confirms payment was successful
+    if (isPaymentSuccessful) {
+      payment.status = 'success';
+      payment.paidAt = new Date(verificationData.paid_at || verificationData.paidAt);
       
-      // Process payment based on type
+      // Verify amount matches (convert from kobo to main currency)
+      const verifiedAmount = verificationData.amount / 100;
+      const expectedAmount = payment.amount + (payment.fees?.gateway || 0) + (payment.fees?.platform || 0);
+      
+      if (Math.abs(verifiedAmount - expectedAmount) > 1) { // Allow 1 KES tolerance
+        console.warn('Amount mismatch:', { verifiedAmount, expectedAmount });
+      }
+      
+      // Process payment based on type (credit wallet, update adoption, etc.)
       await processSuccessfulPayment(payment);
+      
+      console.log('Payment processed successfully:', payment._id);
     } else {
-      payment.failureReason = verificationData.gateway_response;
+      payment.status = 'failed';
+      payment.failureReason = verificationData.gateway_response || 'Payment not successful';
+      console.log('Payment marked as failed:', payment.failureReason);
     }
 
     await payment.save();
 
     res.json({
-      success: true,
-      message: payment.status === 'success' ? 'Payment verified successfully' : 'Payment verification failed',
+      success: isPaymentSuccessful,
+      message: isPaymentSuccessful ? 'Payment verified successfully' : 'Payment verification failed',
       data: {
-        payment,
-        status: payment.status,
-        amount: payment.amount,
-        fees: payment.fees,
-        net_amount: payment.netAmount
+        payment: {
+          id: payment._id,
+          status: payment.status,
+          amount: payment.amount,
+          currency: payment.currency,
+          paidAt: payment.paidAt,
+          paymentType: payment.paymentType
+        },
+        verification: {
+          status: verificationData.status,
+          reference: verificationData.reference,
+          amount: verificationData.amount / 100, // Convert from kobo
+          currency: verificationData.currency,
+          channel: verificationData.channel,
+          paid_at: verificationData.paid_at
+        }
       }
     });
   } catch (error) {
     console.error('Verify payment error:', error);
     res.status(500).json({
       success: false,
-      message: 'Server error during payment verification'
+      message: 'Server error during payment verification',
+      error: error.message
     });
   }
 };
@@ -398,27 +439,72 @@ const processSuccessfulPayment = async (payment) => {
 
 // Webhook event handlers
 const handleSuccessfulCharge = async (data) => {
-  const payment = await Payment.findOne({
-    'gatewayResponse.reference': data.reference
-  });
+  try {
+    console.log('Handling successful charge webhook:', { reference: data.reference, status: data.status });
+    
+    const payment = await Payment.findOne({
+      'gatewayResponse.reference': data.reference
+    });
 
-  if (payment && payment.status === 'pending') {
-    payment.status = 'success';
-    payment.paidAt = new Date(data.paid_at);
-    await payment.save();
-    await processSuccessfulPayment(payment);
+    if (!payment) {
+      console.warn('Payment not found for reference:', data.reference);
+      return;
+    }
+
+    // Only process if payment is pending and Paystack confirms success
+    if (payment.status === 'pending' && data.status === 'success') {
+      payment.status = 'success';
+      payment.paidAt = new Date(data.paid_at || data.paidAt);
+      
+      // Store full webhook data for audit
+      payment.gatewayResponse.webhookData = data;
+      
+      // Verify amount matches (convert from kobo)
+      const webhookAmount = data.amount / 100;
+      const expectedAmount = payment.amount + (payment.fees?.gateway || 0) + (payment.fees?.platform || 0);
+      
+      if (Math.abs(webhookAmount - expectedAmount) > 1) {
+        console.warn('Webhook amount mismatch:', { webhookAmount, expectedAmount, reference: data.reference });
+      }
+      
+      await payment.save();
+      await processSuccessfulPayment(payment);
+      
+      console.log('Payment processed via webhook successfully:', payment._id);
+    } else {
+      console.log('Payment already processed or status not success:', {
+        paymentStatus: payment.status,
+        webhookStatus: data.status
+      });
+    }
+  } catch (error) {
+    console.error('Handle successful charge error:', error);
   }
 };
 
 const handleFailedCharge = async (data) => {
-  const payment = await Payment.findOne({
-    'gatewayResponse.reference': data.reference
-  });
+  try {
+    console.log('Handling failed charge webhook:', { reference: data.reference });
+    
+    const payment = await Payment.findOne({
+      'gatewayResponse.reference': data.reference
+    });
 
-  if (payment && payment.status === 'pending') {
-    payment.status = 'failed';
-    payment.failureReason = data.gateway_response;
-    await payment.save();
+    if (!payment) {
+      console.warn('Payment not found for reference:', data.reference);
+      return;
+    }
+
+    if (payment.status === 'pending') {
+      payment.status = 'failed';
+      payment.failureReason = data.gateway_response || 'Payment failed';
+      payment.gatewayResponse.webhookData = data;
+      await payment.save();
+      
+      console.log('Payment marked as failed via webhook:', payment._id);
+    }
+  } catch (error) {
+    console.error('Handle failed charge error:', error);
   }
 };
 
