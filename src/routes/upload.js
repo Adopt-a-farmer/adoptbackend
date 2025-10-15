@@ -1,5 +1,8 @@
 const express = require('express');
 const multer = require('multer');
+const path = require('path');
+const fs = require('fs');
+const os = require('os');
 const {
   uploadSingleImage,
   uploadMultipleImages,
@@ -7,16 +10,23 @@ const {
   deleteUploadedFile,
   getUploadSignature,
   uploadProfileImage,
-  uploadExpertDocuments
+  uploadExpertDocuments,
+  uploadRegistrationDocuments
 } = require('../controllers/uploadController');
 const { protect, authorize } = require('../middleware/auth');
 
 const router = express.Router();
 
+// Get OS temp directory and ensure it exists
+const tempDir = os.tmpdir();
+if (!fs.existsSync(tempDir)) {
+  fs.mkdirSync(tempDir, { recursive: true });
+}
+
 // Configure multer for file uploads
 const storage = multer.diskStorage({
   destination: function (req, file, cb) {
-    cb(null, '/tmp/');
+    cb(null, tempDir);
   },
   filename: function (req, file, cb) {
     const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
@@ -28,7 +38,10 @@ const storage = multer.diskStorage({
 const fileFilter = (req, file, cb) => {
   const allowedTypes = process.env.ALLOWED_FILE_TYPES?.split(',') || [
     'image/jpeg', 'image/png', 'image/gif', 'image/webp',
-    'video/mp4', 'video/mov', 'video/avi', 'video/mkv'
+    'video/mp4', 'video/mov', 'video/avi', 'video/mkv',
+    'application/pdf',
+    'application/msword',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
   ];
   
   if (allowedTypes.includes(file.mimetype)) {
@@ -46,7 +59,36 @@ const upload = multer({
   fileFilter: fileFilter
 });
 
-// All upload routes require authentication
+// Create a flexible upload that accepts multiple field names
+const registrationUpload = (req, res, next) => {
+  // Try to determine which field name is being used
+  const uploadMiddleware = upload.fields([
+    { name: 'documents', maxCount: 10 },
+    { name: 'images', maxCount: 10 },
+    { name: 'certificates', maxCount: 10 },
+    { name: 'profilePicture', maxCount: 1 }
+  ]);
+  
+  uploadMiddleware(req, res, (err) => {
+    if (err) {
+      return next(err);
+    }
+    // Normalize the files to req.files array for backward compatibility
+    if (req.files) {
+      const allFiles = [];
+      Object.keys(req.files).forEach(fieldName => {
+        allFiles.push(...req.files[fieldName]);
+      });
+      req.files = allFiles;
+    }
+    next();
+  });
+};
+
+// Public route for registration documents (no auth required)
+router.post('/registration-documents', registrationUpload, uploadRegistrationDocuments);
+
+// All other upload routes require authentication
 router.use(protect);
 
 // Image upload routes

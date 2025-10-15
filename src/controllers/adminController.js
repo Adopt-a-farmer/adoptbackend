@@ -1235,6 +1235,563 @@ const getAllForVerification = async (req, res) => {
   }
 };
 
+// @desc    Get user's uploaded documents for verification
+// @route   GET /api/admin/verification/:userId/documents
+// @access  Private (Admin only)
+const getUserDocuments = async (req, res) => {
+  try {
+    const { userId } = req.params;
+
+    const user = await User.findById(userId).select('-password');
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+
+    let documents = [];
+    let profile = null;
+
+    // Get documents based on user role
+    switch (user.role) {
+      case 'farmer':
+        profile = await FarmerProfile.findOne({ user: userId });
+        if (profile && profile.verificationDocuments) {
+          documents = profile.verificationDocuments;
+        }
+        break;
+      case 'expert':
+        profile = await ExpertProfile.findOne({ user: userId });
+        if (profile) {
+          documents = [
+            ...(profile.verificationDocuments || []),
+            ...(profile.certificates || []).map(cert => ({
+              ...cert,
+              type: 'certificate',
+              status: cert.status || 'pending'
+            }))
+          ];
+        }
+        break;
+      case 'adopter':
+        profile = await AdopterProfile.findOne({ user: userId });
+        if (profile && profile.profilePicture) {
+          documents = [{
+            url: profile.profilePicture.url,
+            publicId: profile.profilePicture.publicId,
+            type: 'profile_picture',
+            fileName: 'Profile Picture',
+            uploadedAt: profile.createdAt,
+            status: 'approved'
+          }];
+        }
+        break;
+    }
+
+    res.json({
+      success: true,
+      data: {
+        user: {
+          _id: user._id,
+          firstName: user.firstName,
+          lastName: user.lastName,
+          email: user.email,
+          role: user.role
+        },
+        profile,
+        documents
+      }
+    });
+  } catch (error) {
+    console.error('Get user documents error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch documents'
+    });
+  }
+};
+
+// @desc    Approve/reject specific document
+// @route   PUT /api/admin/verification/:userId/documents/:documentId
+// @access  Private (Admin only)
+const updateDocumentStatus = async (req, res) => {
+  try {
+    const { userId, documentId } = req.params;
+    const { status, reason } = req.body;
+
+    if (!['approved', 'rejected', 'pending'].includes(status)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid status'
+      });
+    }
+
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+
+    let profile = null;
+    let updated = false;
+
+    // Update document based on user role
+    switch (user.role) {
+      case 'farmer':
+        profile = await FarmerProfile.findOne({ user: userId });
+        if (profile) {
+          const doc = profile.verificationDocuments.id(documentId);
+          if (doc) {
+            doc.status = status;
+            if (reason) doc.rejectionReason = reason;
+            await profile.save();
+            updated = true;
+          }
+        }
+        break;
+      case 'expert':
+        profile = await ExpertProfile.findOne({ user: userId });
+        if (profile) {
+          const doc = profile.verificationDocuments.id(documentId);
+          if (doc) {
+            doc.status = status;
+            if (reason) doc.rejectionReason = reason;
+            await profile.save();
+            updated = true;
+          } else {
+            // Check certificates
+            const cert = profile.certificates.id(documentId);
+            if (cert) {
+              cert.status = status;
+              if (reason) cert.rejectionReason = reason;
+              await profile.save();
+              updated = true;
+            }
+          }
+        }
+        break;
+    }
+
+    if (!updated) {
+      return res.status(404).json({
+        success: false,
+        message: 'Document not found'
+      });
+    }
+
+    res.json({
+      success: true,
+      message: `Document ${status} successfully`,
+      data: { profile }
+    });
+  } catch (error) {
+    console.error('Update document status error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to update document status'
+    });
+  }
+};
+
+// @desc    Get unassigned farmers (no active adoptions)
+// @route   GET /api/admin/farmers/unassigned
+// @access  Private (Admin only)
+const getUnassignedFarmers = async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 20;
+    const skip = (page - 1) * limit;
+
+    // Get all farmers with active adoptions
+    const farmersWithActiveAdoptions = await Adoption.distinct('farmer', {
+      status: 'active'
+    });
+
+    // Get verified farmers without active adoptions
+    const filter = {
+      verificationStatus: 'verified',
+      user: { $nin: farmersWithActiveAdoptions }
+    };
+
+    if (req.query.search) {
+      filter.$or = [
+        { farmName: { $regex: req.query.search, $options: 'i' } },
+        { 'location.county': { $regex: req.query.search, $options: 'i' } },
+        { farmingType: { $regex: req.query.search, $options: 'i' } }
+      ];
+    }
+
+    const unassignedFarmers = await FarmerProfile.find(filter)
+      .populate('user', 'firstName lastName email phone avatar')
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit);
+
+    const total = await FarmerProfile.countDocuments(filter);
+
+    res.json({
+      success: true,
+      data: {
+        farmers: unassignedFarmers,
+        pagination: {
+          current: page,
+          pages: Math.ceil(total / limit),
+          total,
+          hasNext: page * limit < total,
+          hasPrev: page > 1
+        }
+      }
+    });
+  } catch (error) {
+    console.error('Get unassigned farmers error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch unassigned farmers'
+    });
+  }
+};
+
+// @desc    Get all verified adopters (for linking)
+// @route   GET /api/admin/adopters/available
+// @access  Private (Admin only)
+const getAvailableAdopters = async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 20;
+    const skip = (page - 1) * limit;
+
+    const filter = {};
+
+    if (req.query.search) {
+      const users = await User.find({
+        role: 'adopter',
+        $or: [
+          { firstName: { $regex: req.query.search, $options: 'i' } },
+          { lastName: { $regex: req.query.search, $options: 'i' } },
+          { email: { $regex: req.query.search, $options: 'i' } }
+        ]
+      }).select('_id');
+      
+      filter.user = { $in: users.map(u => u._id) };
+    }
+
+    const adopters = await AdopterProfile.find(filter)
+      .populate('user', 'firstName lastName email phone avatar isActive')
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit);
+
+    // Get adoption counts for each adopter
+    const adoptersWithCounts = await Promise.all(
+      adopters.map(async (adopter) => {
+        const adoptionCount = await Adoption.countDocuments({
+          adopter: adopter.user._id,
+          status: 'active'
+        });
+        
+        return {
+          ...adopter.toObject(),
+          activeAdoptionsCount: adoptionCount
+        };
+      })
+    );
+
+    const total = await AdopterProfile.countDocuments(filter);
+
+    res.json({
+      success: true,
+      data: {
+        adopters: adoptersWithCounts,
+        pagination: {
+          current: page,
+          pages: Math.ceil(total / limit),
+          total,
+          hasNext: page * limit < total,
+          hasPrev: page > 1
+        }
+      }
+    });
+  } catch (error) {
+    console.error('Get available adopters error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch adopters'
+    });
+  }
+};
+
+// @desc    Create adoption (link farmer to adopter)
+// @route   POST /api/admin/adoptions/create
+// @access  Private (Admin only)
+const createAdoption = async (req, res) => {
+  try {
+    const {
+      farmerId,
+      adopterId,
+      adoptionType,
+      paymentPlan,
+      expectedReturns,
+      notes
+    } = req.body;
+
+    // Validate farmer
+    const farmerProfile = await FarmerProfile.findOne({ user: farmerId })
+      .populate('user', 'firstName lastName email');
+    
+    if (!farmerProfile || farmerProfile.verificationStatus !== 'verified') {
+      return res.status(400).json({
+        success: false,
+        message: 'Farmer not found or not verified'
+      });
+    }
+
+    // Check if farmer already has active adoption
+    const existingAdoption = await Adoption.findOne({
+      farmer: farmerId,
+      status: 'active'
+    });
+
+    if (existingAdoption) {
+      return res.status(400).json({
+        success: false,
+        message: 'Farmer already has an active adoption'
+      });
+    }
+
+    // Validate adopter
+    const adopterProfile = await AdopterProfile.findOne({ user: adopterId })
+      .populate('user', 'firstName lastName email');
+    
+    if (!adopterProfile) {
+      return res.status(400).json({
+        success: false,
+        message: 'Adopter not found'
+      });
+    }
+
+    // Create adoption
+    const adoption = await Adoption.create({
+      farmer: farmerId,
+      adopter: adopterId,
+      adoptionType: adoptionType || 'standard',
+      status: 'active',
+      paymentPlan: {
+        type: paymentPlan?.type || 'monthly',
+        amount: paymentPlan?.amount || 0,
+        frequency: paymentPlan?.frequency || 'monthly',
+        totalPaid: 0
+      },
+      expectedReturns: expectedReturns || {
+        crops: [],
+        estimatedValue: 0
+      },
+      notes: notes || '',
+      createdBy: req.user._id,
+      startDate: new Date()
+    });
+
+    const populatedAdoption = await Adoption.findById(adoption._id)
+      .populate('farmer', 'firstName lastName email')
+      .populate('adopter', 'firstName lastName email')
+      .populate('createdBy', 'firstName lastName email');
+
+    // TODO: Send notifications to farmer and adopter
+
+    res.status(201).json({
+      success: true,
+      message: 'Adoption created successfully',
+      data: { adoption: populatedAdoption }
+    });
+  } catch (error) {
+    console.error('Create adoption error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to create adoption'
+    });
+  }
+};
+
+// @desc    Get user details with all documents
+// @route   GET /api/admin/users/:id/details
+// @access  Private (Admin only)
+const getUserDetailsWithDocuments = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    // Find user
+    const user = await User.findById(id);
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+
+    let profile = null;
+    let documents = [];
+    let verificationHistory = [];
+
+    // Get profile and documents based on user role
+    if (user.role === 'farmer') {
+      profile = await FarmerProfile.findOne({ user: id });
+      if (profile) {
+        // Collect all documents
+        if (profile.identificationDocument) {
+          documents.push({
+            type: 'identification',
+            url: profile.identificationDocument.url,
+            status: profile.identificationDocument.verificationStatus || 'pending',
+            name: 'Identification Document'
+          });
+        }
+        if (profile.farmOwnershipDocument) {
+          documents.push({
+            type: 'farmOwnership',
+            url: profile.farmOwnershipDocument.url,
+            status: profile.farmOwnershipDocument.verificationStatus || 'pending',
+            name: 'Farm Ownership Document'
+          });
+        }
+        if (profile.businessRegistration) {
+          documents.push({
+            type: 'businessRegistration',
+            url: profile.businessRegistration.url,
+            status: profile.businessRegistration.verificationStatus || 'pending',
+            name: 'Business Registration'
+          });
+        }
+        profile.farmPhotos?.forEach((photo, index) => {
+          documents.push({
+            type: 'farmPhoto',
+            url: photo,
+            status: 'approved',
+            name: `Farm Photo ${index + 1}`
+          });
+        });
+
+        // Get verification history
+        verificationHistory = profile.verificationHistory || [];
+      }
+    } else if (user.role === 'expert') {
+      profile = await ExpertProfile.findOne({ user: id });
+      if (profile) {
+        // Collect expert documents
+        profile.verificationDocuments?.forEach((doc) => {
+          documents.push({
+            type: doc.documentType || 'other',
+            url: doc.url,
+            status: doc.verificationStatus || 'pending',
+            name: doc.documentType || 'Document'
+          });
+        });
+
+        // Get verification history
+        verificationHistory = profile.verificationHistory || [];
+      }
+    } else if (user.role === 'adopter') {
+      profile = await AdopterProfile.findOne({ user: id });
+    }
+
+    res.json({
+      success: true,
+      data: {
+        user: {
+          _id: user._id,
+          firstName: user.firstName,
+          lastName: user.lastName,
+          email: user.email,
+          phone: user.phone,
+          role: user.role,
+          isActive: user.isActive,
+          deactivationReason: user.deactivationReason,
+          createdAt: user.createdAt
+        },
+        profile,
+        documents,
+        verificationHistory
+      }
+    });
+  } catch (error) {
+    console.error('Get user details error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error'
+    });
+  }
+};
+
+// @desc    Suspend/Unsuspend user
+// @route   POST /api/admin/users/:id/suspend
+// @access  Private (Admin only)
+const suspendUser = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { suspend, reason } = req.body;
+
+    const user = await User.findById(id);
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+
+    // Update user status
+    user.isActive = !suspend;
+    if (suspend && reason) {
+      user.deactivationReason = reason;
+      user.deactivatedAt = new Date();
+    } else if (!suspend) {
+      user.deactivationReason = undefined;
+      user.deactivatedAt = undefined;
+    }
+
+    await user.save();
+
+    // Add to verification history if it's a profile
+    if (user.role === 'farmer') {
+      const profile = await FarmerProfile.findOne({ user: id });
+      if (profile) {
+        profile.verificationHistory = profile.verificationHistory || [];
+        profile.verificationHistory.push({
+          action: suspend ? 'suspended' : 'unsuspended',
+          performedBy: req.user._id,
+          performedAt: new Date(),
+          notes: reason || 'No reason provided'
+        });
+        await profile.save();
+      }
+    } else if (user.role === 'expert') {
+      const profile = await ExpertProfile.findOne({ user: id });
+      if (profile) {
+        profile.verificationHistory = profile.verificationHistory || [];
+        profile.verificationHistory.push({
+          action: suspend ? 'suspended' : 'unsuspended',
+          performedBy: req.user._id,
+          performedAt: new Date(),
+          notes: reason || 'No reason provided'
+        });
+        await profile.save();
+      }
+    }
+
+    res.json({
+      success: true,
+      message: `User ${suspend ? 'suspended' : 'unsuspended'} successfully`,
+      data: { user }
+    });
+  } catch (error) {
+    console.error('Suspend user error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error'
+    });
+  }
+};
+
 module.exports = {
   getDashboardStats,
   getAllUsers,
@@ -1253,5 +1810,12 @@ module.exports = {
   getFarmerAvailability,
   createUser,
   verifyUser,
-  getAllForVerification
+  getAllForVerification,
+  getUserDocuments,
+  updateDocumentStatus,
+  getUnassignedFarmers,
+  getAvailableAdopters,
+  createAdoption,
+  getUserDetailsWithDocuments,
+  suspendUser
 };

@@ -159,7 +159,10 @@ const expertProfileSchema = new mongoose.Schema({
     default: 'pending'
   },
   verificationDocuments: [{
-    type: String, // 'degree', 'certificate', 'license', 'id'
+    type: {
+      type: String, // 'degree', 'certificate', 'license', 'id'
+      default: 'other'
+    },
     url: String,
     publicId: String,
     fileName: String,

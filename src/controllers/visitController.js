@@ -492,22 +492,10 @@ const getVisitStats = async (req, res) => {
   }
 };
 
-module.exports = {
-  getFarmVisits,
-  getFarmVisit,
-  scheduleFarmVisit,
-  updateVisitStatus,
-  addVisitFeedback,
-  getFarmerAvailability,
-  getVisitStats,
-  setFarmerAvailability,
-  getAvailability
-};
-
 // @desc    Set available time slots for a farmer for a date
 // @route   POST /api/visits/availability
 // @access  Private (Farmer)
-async function setFarmerAvailability(req, res) {
+const setFarmerAvailability = async (req, res) => {
   try {
     const userId = req.user._id;
     const { date, time_slots } = req.body;
@@ -526,12 +514,16 @@ async function setFarmerAvailability(req, res) {
       });
     }
 
-    const farmer = await FarmerProfile.findOne({ user: userId });
+    // Use user ID directly instead of requiring farmer profile
+    let farmer = await FarmerProfile.findOne({ user: userId });
     if (!farmer) {
-      return res.status(404).json({ 
-        success: false, 
-        message: 'Farmer profile not found' 
+      // Auto-create farmer profile if it doesn't exist
+      farmer = await FarmerProfile.create({
+        user: userId,
+        farmName: req.user.firstName + "'s Farm",
+        location: { type: 'Point', coordinates: [0, 0] }
       });
+      console.log('✅ Auto-created farmer profile for user:', userId);
     }
 
     const normalizedDate = new Date(date);
@@ -586,20 +578,23 @@ async function setFarmerAvailability(req, res) {
       message: 'Server error' 
     });
   }
-}
+};
 
 // @desc    Get saved availability for the authenticated farmer
 // @route   GET /api/visits/availability?start=YYYY-MM-DD&end=YYYY-MM-DD
 // @access  Private (Farmer)
-async function getAvailability(req, res) {
+const getAvailability = async (req, res) => {
   try {
     const userId = req.user._id;
-    const farmer = await FarmerProfile.findOne({ user: userId });
+    let farmer = await FarmerProfile.findOne({ user: userId });
     if (!farmer) {
-      return res.status(404).json({ 
-        success: false, 
-        message: 'Farmer profile not found' 
+      // Auto-create farmer profile if it doesn't exist
+      farmer = await FarmerProfile.create({
+        user: userId,
+        farmName: req.user.firstName + "'s Farm",
+        location: { type: 'Point', coordinates: [0, 0] }
       });
+      console.log('✅ Auto-created farmer profile for user:', userId);
     }
 
     const { start, end, date } = req.query;
@@ -667,4 +662,16 @@ async function getAvailability(req, res) {
       message: 'Server error' 
     });
   }
-}
+};
+
+module.exports = {
+  getFarmVisits,
+  getFarmVisit,
+  scheduleFarmVisit,
+  updateVisitStatus,
+  addVisitFeedback,
+  getFarmerAvailability,
+  getVisitStats,
+  setFarmerAvailability,
+  getAvailability
+};

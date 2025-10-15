@@ -209,7 +209,7 @@ const getCurrentFarmerProfile = async (req, res) => {
     res.json({
       success: true,
       data: {
-        profile: farmer
+        farmer: farmer
       }
     });
   } catch (error) {
@@ -1111,38 +1111,33 @@ const changeFarmerPassword = async (req, res) => {
 // @access  Private (Farmer only)
 const getFarmerExperts = async (req, res) => {
   try {
-    const userId = req.user._id;
-    const ExpertMentorship = require('../models/ExpertMentorship');
+    const ExpertProfile = require('../models/ExpertProfile');
+    
+    // Get query parameters for filtering
+    const { isAvailable, limit = 10 } = req.query;
+    
+    // Build query
+    const query = {};
+    if (isAvailable === 'true') {
+      query.isAvailable = true;
+    }
 
-    // Get active mentorships for this farmer
-    const mentorships = await ExpertMentorship.find({ 
-      farmer: userId, 
-      status: 'active' 
-    })
-    .populate('expert', 'firstName lastName avatar email')
-    .populate('farmer', 'firstName lastName')
-    .sort({ startDate: -1 });
+    // Get available experts
+    const experts = await ExpertProfile.find(query)
+      .populate('user', 'firstName lastName avatar email')
+      .select('specializations experience consultationRate rating isAvailable totalConsultations verificationStatus')
+      .limit(parseInt(limit))
+      .sort({ rating: -1, totalConsultations: -1 });
 
-    const experts = mentorships.map(mentorship => ({
-      _id: mentorship.expert._id,
-      firstName: mentorship.expert.firstName,
-      lastName: mentorship.expert.lastName,
-      avatar: mentorship.expert.avatar,
-      email: mentorship.expert.email,
-      specialization: mentorship.specialization,
-      mentorshipId: mentorship._id,
-      startDate: mentorship.startDate,
-      status: mentorship.status,
-      goals: mentorship.goals,
-      completedGoals: mentorship.goals.filter(goal => goal.status === 'completed').length,
-      totalGoals: mentorship.goals.length,
-      // Create conversation ID for messaging
-      conversationId: [userId, mentorship.expert._id].sort().join('_')
-    }));
+    // Filter only verified experts
+    const verifiedExperts = experts.filter(expert => expert.verificationStatus === 'verified');
 
     res.json({
       success: true,
-      data: { experts }
+      data: { 
+        experts: verifiedExperts,
+        total: verifiedExperts.length
+      }
     });
   } catch (error) {
     console.error('Get farmer experts error:', error);

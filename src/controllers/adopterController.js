@@ -847,15 +847,24 @@ const getMentoringConversations = async (req, res) => {
       .populate('farmer', 'firstName lastName avatar')
       .sort({ createdAt: -1 });
 
-    // For now, return empty conversations as this is a placeholder
-    // In a real implementation, you would fetch actual conversation data
-    const conversations = mentorships.map(mentorship => ({
-      id: mentorship._id,
-      farmer: mentorship.farmer,
-      specialization: mentorship.specialization,
-      status: mentorship.status,
-      lastInteraction: mentorship.updatedAt,
-      messageCount: 0 // Placeholder
+    // Get real message counts from conversations
+    const Message = require('../models/Message');
+    const conversations = await Promise.all(mentorships.map(async (mentorship) => {
+      const messageCount = await Message.countDocuments({
+        $or: [
+          { sender: adopterId, receiver: mentorship.farmer._id },
+          { sender: mentorship.farmer._id, receiver: adopterId }
+        ]
+      });
+
+      return {
+        id: mentorship._id,
+        farmer: mentorship.farmer,
+        specialization: mentorship.specialization,
+        status: mentorship.status,
+        lastInteraction: mentorship.updatedAt,
+        messageCount
+      };
     }));
 
     const paginatedConversations = conversations.slice((page - 1) * limit, page * limit);

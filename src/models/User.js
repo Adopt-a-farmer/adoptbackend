@@ -66,7 +66,24 @@ const userSchema = new mongoose.Schema({
   resetPasswordToken: String,
   resetPasswordExpire: Date,
   emailVerificationToken: String,
-  emailVerificationExpire: Date
+  emailVerificationExpire: Date,
+  // Blockchain fields
+  blockchainAddress: {
+    type: String,
+    sparse: true,
+    unique: true,
+    index: true
+  },
+  blockchainVerified: {
+    type: Boolean,
+    default: false
+  },
+  blockchainRegistrationTxHash: {
+    type: String
+  },
+  blockchainVerificationTxHash: {
+    type: String
+  }
 }, {
   timestamps: true
 });

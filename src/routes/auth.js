@@ -1,5 +1,6 @@
 const express = require('express');
 const rateLimit = require('express-rate-limit');
+const multer = require('multer');
 const {
   register,
   login,
@@ -15,7 +16,10 @@ const {
   completeSignup,
   resendOTP,
   testEmail,
-  testDatabase
+  testDatabase,
+  forgotPassword,
+  verifyResetOTP,
+  resetPassword
 } = require('../controllers/otpController');
 const { protect } = require('../middleware/auth');
 const {
@@ -29,6 +33,9 @@ const { debugSpecificUser } = require('../utils/debugUserRole');
 const { checkVerificationStatus, getVerificationStatus } = require('../middleware/verification');
 
 const router = express.Router();
+
+// Configure multer for form data parsing (no files, just multipart/form-data)
+const upload = multer();
 
 // Rate limiting for auth routes
 const authLimiter = rateLimit({
@@ -131,7 +138,12 @@ router.put('/change-password', protect, validatePasswordChange, validate, change
 router.post('/send-otp', sendOTP);
 router.post('/verify-otp', verifyOTP);
 router.post('/resend-otp', resendOTP);
-router.post('/complete-signup', completeSignup);
+router.post('/complete-signup', upload.none(), completeSignup); // Add multer middleware to parse FormData
+
+// Password reset routes
+router.post('/forgot-password', forgotPassword);
+router.post('/verify-reset-otp', verifyResetOTP);
+router.post('/reset-password', resetPassword);
 
 // Test email configuration (development only)
 if (process.env.NODE_ENV !== 'production') {

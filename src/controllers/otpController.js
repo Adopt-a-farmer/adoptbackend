@@ -344,10 +344,13 @@ const verifyOTP = async (req, res) => {
 // @access  Public
 const completeSignup = async (req, res) => {
   try {
+    console.log('📝 Complete signup request body:', req.body);
+    console.log('📝 Request files:', req.files);
+    console.log('📝 All form fields:', Object.keys(req.body));
+    
     // For multipart/form-data, the token might be in the body
     const { 
       email, 
-      password, 
       phone, 
       role, 
       firstName, 
@@ -359,36 +362,60 @@ const completeSignup = async (req, res) => {
       specializations,
       experience,
       hourlyRate,
-      bio
+      bio,
+      donationAmount,
+      certificates,
+      profilePicture,
+      documents // Document URLs from Cloudinary
     } = req.body;
 
-    if (!email || !password || !role) {
-      return res.status(400).json({
-        success: false,
-        message: 'Email, password, and role are required'
-      });
-    }
-
-    // Check if user already exists
-    const existingUser = await User.findOne({ email });
-    if (existingUser) {
-      return res.status(400).json({
-        success: false,
-        message: 'User with this email already exists'
-      });
-    }
-
-    // Create user
-    const user = await User.create({
-      firstName,
-      lastName,
-      email,
-      password,
-      phone,
-      role,
-      isEmailVerified: true, // Since they completed OTP verification
-      verificationStatus: role === 'adopter' ? 'verified' : 'pending'
+    console.log('📧 Email:', email);
+    console.log('👤 Role:', role);
+    console.log('👤 Name:', firstName, lastName);
+    console.log('📝 Additional fields:', {
+      hasBio: !!bio,
+      hasDonationAmount: !!donationAmount,
+      hasCertificates: !!certificates,
+      hasProfilePicture: !!profilePicture
     });
+
+    if (!email || !role) {
+      return res.status(400).json({
+        success: false,
+        message: 'Email and role are required',
+        receivedData: { email, role, allFields: Object.keys(req.body) }
+      });
+    }
+
+    // Check if user already exists and was created during OTP verification
+    let user = await User.findOne({ email });
+    if (!user) {
+      return res.status(400).json({
+        success: false,
+        message: 'User not found. Please complete email verification first.'
+      });
+    }
+    
+    // Update user with additional details
+    user.firstName = firstName || user.firstName;
+    user.lastName = lastName || user.lastName;
+    user.phone = phone || user.phone;
+    user.verificationStatus = role === 'adopter' ? 'verified' : 'pending';
+    
+    // Add profile picture to user avatar if provided
+    if (profilePicture) {
+      try {
+        const parsedPicture = typeof profilePicture === 'string' ? JSON.parse(profilePicture) : profilePicture;
+        user.avatar = {
+          url: parsedPicture.url,
+          publicId: parsedPicture.publicId
+        };
+      } catch (parseError) {
+        console.error('Error parsing profile picture:', parseError);
+      }
+    }
+    
+    await user.save();
 
     // Create role-specific profile
     if (role === 'farmer') {
@@ -403,22 +430,126 @@ const completeSignup = async (req, res) => {
       });
     } else if (role === 'expert') {
       const ExpertProfile = require('../models/ExpertProfile');
-      await ExpertProfile.create({
+      const profileData = {
         user: user._id,
         specializations: specializations ? JSON.parse(specializations) : [],
-        bio,
-        experience: {
-          yearsOfExperience: experience || 0
-        },
-        hourlyRate,
+        bio: bio || '',
+        yearsOfExperience: experience || 0,
+        hourlyRate: hourlyRate || 0,
         verificationStatus: 'pending'
-      });
+      };
+      
+      // Add profile picture if provided
+      if (profilePicture) {
+        try {
+          const parsedPicture = typeof profilePicture === 'string' ? JSON.parse(profilePicture) : profilePicture;
+          profileData.profilePicture = {
+            url: parsedPicture.url,
+            publicId: parsedPicture.publicId
+          };
+        } catch (parseError) {
+          console.error('Error parsing expert profile picture:', parseError);
+        }
+      }
+      
+      // Add certificates if provided
+      if (certificates) {
+        try {
+          const parsedCertificates = typeof certificates === 'string' ? JSON.parse(certificates) : certificates;
+          if (Array.isArray(parsedCertificates) && parsedCertificates.length > 0) {
+            profileData.certificates = parsedCertificates.map(cert => ({
+              name: cert.name || 'Certificate',
+              issuer: cert.issuer || 'Unknown',
+              issueDate: cert.issueDate || new Date(),
+              certificateUrl: cert.url,
+              publicId: cert.publicId,
+              status: 'pending'
+            }));
+          }
+        } catch (parseError) {
+          console.error('Error parsing certificates:', parseError);
+        }
+      }
+      
+      // Add verification documents if provided
+      if (documents) {
+        try {
+          const parsedDocuments = typeof documents === 'string' ? JSON.parse(documents) : documents;
+          if (Array.isArray(parsedDocuments) && parsedDocuments.length > 0) {
+            profileData.verificationDocuments = parsedDocuments.map(doc => ({
+              type: doc.type || 'other',
+              url: doc.url || doc.certificateUrl || doc,
+              publicId: doc.publicId || '',
+              fileName: doc.fileName || doc.name || 'document',
+              uploadDate: doc.uploadDate || new Date(),
+              status: doc.status || 'pending'
+            }));
+          }
+        } catch (parseError) {
+          console.error('Error parsing documents:', parseError);
+        }
+      }
+      
+      // Also use certificates as verification documents if documents not provided
+      if (!documents && certificates) {
+        try {
+          const parsedCertificates = typeof certificates === 'string' ? JSON.parse(certificates) : certificates;
+          console.log('📋 Parsed certificates for verification:', JSON.stringify(parsedCertificates, null, 2));
+          
+          if (Array.isArray(parsedCertificates) && parsedCertificates.length > 0) {
+            // Map certificates to verification documents subdocument structure
+            const verificationDocs = parsedCertificates.map(cert => {
+              const doc = {
+                type: 'certificate',
+                url: cert.url || cert.certificateUrl || '',
+                publicId: cert.publicId || '',
+                fileName: cert.fileName || cert.name || 'certificate',
+                uploadDate: cert.uploadDate ? new Date(cert.uploadDate) : new Date(),
+                status: 'pending'
+              };
+              console.log('📄 Mapped verification doc:', JSON.stringify(doc, null, 2));
+              return doc;
+            }).filter(doc => doc.url); // Only include if URL exists
+            
+            console.log('✅ Final verification documents array:', JSON.stringify(verificationDocs, null, 2));
+            profileData.verificationDocuments = verificationDocs;
+          }
+        } catch (parseError) {
+          console.error('❌ Error parsing certificates for verification:', parseError);
+          console.error('📋 Certificates value:', certificates);
+        }
+      }
+      
+      console.log('🔍 Final profileData before create:', JSON.stringify(profileData, null, 2));
+      
+      await ExpertProfile.create(profileData);
     } else if (role === 'adopter') {
       const AdopterProfile = require('../models/AdopterProfile');
-      await AdopterProfile.create({
+      const profileData = {
         user: user._id,
-        verificationStatus: 'verified' // Adopters are auto-verified
-      });
+        verificationStatus: 'verified', // Adopters are auto-verified
+        bio: bio || ''
+      };
+      
+      // Add donation amount if provided
+      if (donationAmount) {
+        profileData.preferredDonationAmount = parseFloat(donationAmount);
+      }
+      
+      // Add profile picture if provided
+      if (profilePicture) {
+        try {
+          const parsedPicture = typeof profilePicture === 'string' ? JSON.parse(profilePicture) : profilePicture;
+          profileData.profilePicture = {
+            url: parsedPicture.url,
+            publicId: parsedPicture.publicId
+          };
+        } catch (parseError) {
+          console.error('Error parsing adopter profile picture:', parseError);
+        }
+      }
+      
+      await AdopterProfile.create(profileData);
     }
 
     // Generate JWT token
@@ -642,11 +773,276 @@ const resendOTP = async (req, res) => {
   }
 };
 
+// @desc    Send password reset OTP
+// @route   POST /api/auth/forgot-password
+// @access  Public
+const forgotPassword = async (req, res) => {
+  try {
+    const { email } = req.body;
+
+    if (!email) {
+      return res.status(400).json({
+        success: false,
+        message: 'Email is required'
+      });
+    }
+
+    // Check if user exists
+    const user = await User.findOne({ email });
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'No user found with this email address'
+      });
+    }
+
+    // Generate password reset OTP
+    const { token, otp } = storeOTP(email, {
+      userId: user._id,
+      type: 'password-reset'
+    });
+
+    console.log('🔑 Password reset OTP generated:', {
+      email,
+      userId: user._id,
+      token,
+      otp: process.env.USE_MOCK_EMAIL === 'true' ? otp : '****'
+    });
+
+    // Send password reset email
+    const mailOptions = {
+      from: `"Adopt a Farmer" <${process.env.GMAIL_USER || 'brianmayoga@gmail.com'}>`,
+      to: email,
+      subject: 'Password Reset - Adopt a Farmer',
+      html: `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
+          <div style="background: linear-gradient(135deg, #2E7D32 0%, #4CAF50 100%); padding: 30px; border-radius: 10px 10px 0 0; text-align: center;">
+            <h1 style="color: white; margin: 0; font-size: 28px;">🌱 Adopt a Farmer</h1>
+            <p style="color: #E8F5E9; margin: 10px 0 0;">Password Reset Request</p>
+          </div>
+          <div style="background: #fff; padding: 40px; border-radius: 0 0 10px 10px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+            <h2 style="color: #2E7D32; margin-top: 0;">Hello ${user.firstName},</h2>
+            <p style="color: #555; line-height: 1.6;">
+              We received a request to reset your password. Use the verification code below to proceed:
+            </p>
+            <div style="background: #F1F8E9; border-left: 4px solid #4CAF50; padding: 20px; margin: 30px 0; text-align: center;">
+              <p style="margin: 0 0 10px; color: #666; font-size: 14px;">Your verification code is:</p>
+              <h1 style="color: #2E7D32; font-size: 36px; letter-spacing: 8px; margin: 0; font-weight: bold;">
+                ${otp}
+              </h1>
+            </div>
+            <p style="color: #555; line-height: 1.6;">
+              This code will expire in 5 minutes. If you didn't request a password reset, please ignore this email and your password will remain unchanged.
+            </p>
+            <div style="margin-top: 30px; padding: 20px; background: #FFF3E0; border-radius: 5px; border-left: 4px solid #FF9800;">
+              <p style="margin: 0; color: #E65100; font-size: 14px;">
+                <strong>Security tip:</strong> Never share this code with anyone. Adopt a Farmer will never ask for your verification code.
+              </p>
+            </div>
+            <div style="margin-top: 30px; padding-top: 20px; border-top: 1px solid #ddd;">
+              <p style="color: #999; font-size: 12px; text-align: center;">
+                © 2025 Adopt a Farmer. All rights reserved.
+              </p>
+            </div>
+          </div>
+        </div>
+      `
+    };
+
+    try {
+      const result = await transporter.sendMail(mailOptions);
+      console.log('📧 Password reset email sent successfully:', {
+        messageId: result.messageId,
+        to: email
+      });
+    } catch (emailError) {
+      console.error('Send password reset email error:', emailError);
+      
+      if (process.env.USE_MOCK_EMAIL !== 'true') {
+        return res.status(500).json({
+          success: false,
+          message: 'Failed to send password reset email'
+        });
+      }
+    }
+
+    const responseMessage = process.env.USE_MOCK_EMAIL === 'true' 
+      ? `Password reset OTP sent (MOCK MODE - Check console for OTP: ${otp})`
+      : `Password reset instructions sent to ${email}`;
+
+    res.json({
+      success: true,
+      message: responseMessage,
+      token,
+      ...(process.env.USE_MOCK_EMAIL === 'true' && { 
+        developmentOTP: otp,
+        note: 'This OTP is shown because USE_MOCK_EMAIL is enabled' 
+      })
+    });
+
+  } catch (error) {
+    console.error('Forgot password error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to process password reset request'
+    });
+  }
+};
+
+// @desc    Verify password reset OTP
+// @route   POST /api/auth/verify-reset-otp
+// @access  Public
+const verifyResetOTP = async (req, res) => {
+  try {
+    const { email, otp, token } = req.body;
+
+    if (!email || !otp || !token) {
+      return res.status(400).json({
+        success: false,
+        message: 'Email, OTP, and token are required'
+      });
+    }
+
+    // Get stored OTP data
+    const otpData = getOTP(token);
+    
+    if (!otpData) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid or expired verification token'
+      });
+    }
+
+    // Check if OTP is expired
+    if (Date.now() > otpData.expires) {
+      deleteOTP(token);
+      return res.status(400).json({
+        success: false,
+        message: 'Verification code has expired. Please request a new one.'
+      });
+    }
+
+    // Verify OTP
+    if (otpData.otp !== otp) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid verification code'
+      });
+    }
+
+    // Verify email matches
+    if (otpData.email !== email) {
+      return res.status(400).json({
+        success: false,
+        message: 'Email mismatch'
+      });
+    }
+
+    // OTP is valid - generate a password reset token
+    const resetToken = crypto.randomBytes(32).toString('hex');
+    
+    // Store reset token
+    const resetData = storeOTP(resetToken, {
+      userId: otpData.userData.userId,
+      email,
+      type: 'password-reset-verified',
+      expiresIn: 15 * 60 * 1000 // 15 minutes
+    });
+
+    // Delete the OTP token since it's been used
+    deleteOTP(token);
+
+    res.json({
+      success: true,
+      message: 'Verification successful',
+      resetToken: resetData.token
+    });
+
+  } catch (error) {
+    console.error('Verify reset OTP error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to verify code'
+    });
+  }
+};
+
+// @desc    Reset password with verified token
+// @route   POST /api/auth/reset-password
+// @access  Public
+const resetPassword = async (req, res) => {
+  try {
+    const { resetToken, newPassword } = req.body;
+
+    if (!resetToken || !newPassword) {
+      return res.status(400).json({
+        success: false,
+        message: 'Reset token and new password are required'
+      });
+    }
+
+    // Get stored reset data
+    const resetData = getOTP(resetToken);
+    
+    if (!resetData || resetData.userData.type !== 'password-reset-verified') {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid or expired reset token'
+      });
+    }
+
+    // Check if token is expired
+    if (Date.now() > resetData.expires) {
+      deleteOTP(resetToken);
+      return res.status(400).json({
+        success: false,
+        message: 'Reset token has expired. Please start the process again.'
+      });
+    }
+
+    // Update user's password
+    const user = await User.findById(resetData.userData.userId);
+    
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+
+    user.password = newPassword; // Will be hashed by pre-save middleware
+    await user.save();
+
+    // Delete the reset token
+    deleteOTP(resetToken);
+
+    console.log('✅ Password reset successful for user:', {
+      userId: user._id,
+      email: user.email
+    });
+
+    res.json({
+      success: true,
+      message: 'Password reset successful. You can now login with your new password.'
+    });
+
+  } catch (error) {
+    console.error('Reset password error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to reset password'
+    });
+  }
+};
+
 module.exports = {
   sendOTP,
   verifyOTP,
   completeSignup,
   resendOTP,
   testEmail,
-  testDatabase
+  testDatabase,
+  forgotPassword,
+  verifyResetOTP,
+  resetPassword
 };

@@ -10,27 +10,28 @@ cloudinary.config({
 /**
  * Upload document to Cloudinary
  * Cloudinary supports PDF, DOC, DOCX, XLS, XLSX, PPT, PPTX and other document formats
- * @param {Buffer|string} file - File buffer or path
+ * @param {string} filePath - File path from multer
  * @param {Object} options - Upload options
  */
-const uploadDocument = async (file, options = {}) => {
+const uploadDocument = async (filePath, options = {}) => {
   try {
     const uploadOptions = {
       folder: options.folder || 'adopt-a-farmer/documents',
-      resource_type: 'raw', // Use 'raw' for documents
+      resource_type: 'auto', // Use 'auto' to handle images, PDFs, and raw files
       public_id: options.public_id,
       tags: options.tags || ['document'],
       context: options.context,
       ...options
     };
 
-    const result = await cloudinary.uploader.upload(file, uploadOptions);
+    const result = await cloudinary.uploader.upload(filePath, uploadOptions);
     return {
       url: result.secure_url,
       publicId: result.public_id,
       format: result.format,
       bytes: result.bytes,
-      resourceType: result.resource_type
+      resourceType: result.resource_type,
+      originalFilename: options.originalFilename
     };
   } catch (error) {
     console.error('Cloudinary document upload error:', error);

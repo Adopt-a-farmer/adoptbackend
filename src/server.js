@@ -27,6 +27,10 @@ const farmUpdatesRoutes = require('./routes/farmUpdates');
 const aiRoutes = require('./routes/aiRoutes');
 const geolocationRoutes = require('./routes/geolocationRoutes');
 const reportRoutes = require('./routes/reportRoutes');
+const blockchainRoutes = require('./routes/blockchain');
+const testimonialRoutes = require('./routes/testimonial');
+const supplierRoutes = require('./routes/supplier');
+const farmerStoryRoutes = require('./routes/farmerStories');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -129,6 +133,10 @@ app.use('/api/farm-updates', farmUpdatesRoutes);
 app.use('/api/ai', aiRoutes);
 app.use('/api/geolocation', geolocationRoutes);
 app.use('/api/reports', reportRoutes);
+app.use('/api/blockchain', blockchainRoutes);
+app.use('/api/testimonials', testimonialRoutes);
+app.use('/api', supplierRoutes);
+app.use('/api/farmer-stories', farmerStoryRoutes);
 
 // 404 handler
 app.use('*', (req, res) => {

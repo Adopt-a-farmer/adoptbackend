@@ -53,6 +53,30 @@ const uploadVideo = async (file, folder = 'adopt-a-farmer/videos') => {
   }
 };
 
+// Upload document to Cloudinary (PDF, DOC, images, etc.)
+const uploadDocument = async (file, folder = 'adopt-a-farmer/documents') => {
+  try {
+    const result = await cloudinary.uploader.upload(file.path, {
+      folder: folder,
+      resource_type: 'auto', // Handles images, PDFs, and raw files
+      quality: 'auto',
+      format: file.mimetype.includes('pdf') ? 'pdf' : undefined
+    });
+
+    return {
+      url: result.secure_url,
+      publicId: result.public_id,
+      format: result.format,
+      bytes: result.bytes,
+      resourceType: result.resource_type,
+      originalFilename: file.originalname
+    };
+  } catch (error) {
+    console.error('Cloudinary document upload error:', error);
+    throw new Error('Document upload failed');
+  }
+};
+
 // Delete file from Cloudinary
 const deleteFile = async (publicId, resourceType = 'image') => {
   try {
@@ -101,6 +125,7 @@ module.exports = {
   cloudinary,
   uploadImage,
   uploadVideo,
+  uploadDocument,
   deleteFile,
   getTransformedUrl,
   getOptimizedImageUrl,

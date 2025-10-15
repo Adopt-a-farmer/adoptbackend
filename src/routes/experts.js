@@ -14,7 +14,9 @@ const {
   createMentorship,
   uploadVerificationDocuments,
   getVerificationDocuments,
-  removeVerificationDocument
+  removeVerificationDocument,
+  getVerifiedExperts,
+  getExpertDetails
 } = require('../controllers/expertController');
 const { protect, authorize } = require('../middleware/auth');
 const { validate, validateProfileUpdate } = require('../middleware/validation');
@@ -26,7 +28,11 @@ router.use((req, res, next) => {
   next();
 });
 
-// Apply expert authorization to all routes
+// Public expert routes (requires authentication but not expert role)
+router.get('/verified', protect, getVerifiedExperts);
+router.get('/:id/details', protect, getExpertDetails);
+
+// Apply expert authorization to remaining routes
 router.use(protect);
 router.use(authorize(['expert']));
 

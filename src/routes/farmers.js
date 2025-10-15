@@ -1,5 +1,7 @@
 const express = require('express');
 const multer = require('multer');
+const os = require('os');
+const fs = require('fs');
 const {
   getFarmers,
   getFarmerById,
@@ -29,9 +31,14 @@ const { cleanupFarmerProfiles } = require('../utils/cleanupFarmerProfiles');
 const router = express.Router();
 
 // Configure multer for file uploads
+const tempDir = os.tmpdir();
+if (!fs.existsSync(tempDir)) {
+  fs.mkdirSync(tempDir, { recursive: true });
+}
+
 const storage = multer.diskStorage({
   destination: function (req, file, cb) {
-    cb(null, '/tmp/');
+    cb(null, tempDir);
   },
   filename: function (req, file, cb) {
     cb(null, Date.now() + '-' + Math.round(Math.random() * 1E9) + '.' + file.originalname.split('.').pop());

@@ -993,7 +993,33 @@ const removeVerificationDocument = async (req, res) => {
 
     await expertProfile.save();
 
-    // TODO: Delete from cloudinary if needed
+    // Delete from cloudinary if profile has media
+    const cloudinary = require('../config/cloudinary');
+    if (expertProfile.profileMedia && expertProfile.profileMedia.length > 0) {
+      for (const media of expertProfile.profileMedia) {
+        if (media.publicId) {
+          try {
+            await cloudinary.uploader.destroy(media.publicId);
+            console.log(`Deleted cloudinary asset: ${media.publicId}`);
+          } catch (cloudErr) {
+            console.error('Error deleting from cloudinary:', cloudErr);
+          }
+        }
+      }
+    }
+    if (expertProfile.certifications && expertProfile.certifications.length > 0) {
+      for (const cert of expertProfile.certifications) {
+        if (cert.certificateUrl && cert.certificateUrl.includes('cloudinary')) {
+          const publicId = cert.certificateUrl.split('/').pop().split('.')[0];
+          try {
+            await cloudinary.uploader.destroy(publicId);
+            console.log(`Deleted cloudinary asset: ${publicId}`);
+          } catch (cloudErr) {
+            console.error('Error deleting certificate from cloudinary:', cloudErr);
+          }
+        }
+      }
+    }
     // await deleteFile(removedDoc.publicId);
 
     res.json({
@@ -1005,6 +1031,136 @@ const removeVerificationDocument = async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Server error'
+    });
+  }
+};
+
+// @desc    Get all verified experts
+// @route   GET /api/experts/verified
+// @access  Private
+const getVerifiedExperts = async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 20;
+    const skip = (page - 1) * limit;
+
+    const filter = { verificationStatus: 'verified' };
+
+    // Filter by specialization
+    if (req.query.specialization) {
+      filter.specializations = { $in: [req.query.specialization] };
+    }
+
+    // Search by name or specialization
+    if (req.query.search) {
+      const users = await User.find({
+        role: 'expert',
+        $or: [
+          { firstName: { $regex: req.query.search, $options: 'i' } },
+          { lastName: { $regex: req.query.search, $options: 'i' } }
+        ]
+      }).select('_id');
+      
+      const userIds = users.map(u => u._id);
+      filter.$or = [
+        { user: { $in: userIds } },
+        { specializations: { $in: [new RegExp(req.query.search, 'i')] } }
+      ];
+    }
+
+    const experts = await ExpertProfile.find(filter)
+      .populate('user', 'firstName lastName email avatar')
+      .select('specializations yearsOfExperience bio rating reviewCount availability certificates profilePicture')
+      .sort({ rating: -1, reviewCount: -1 })
+      .skip(skip)
+      .limit(limit);
+
+    const total = await ExpertProfile.countDocuments(filter);
+
+    res.json({
+      success: true,
+      data: {
+        experts,
+        pagination: {
+          current: page,
+          pages: Math.ceil(total / limit),
+          total,
+          hasNext: page * limit < total,
+          hasPrev: page > 1
+        }
+      }
+    });
+  } catch (error) {
+    console.error('Get verified experts error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch verified experts'
+    });
+  }
+};
+
+// @desc    Get expert details by ID
+// @route   GET /api/experts/:id/details
+// @access  Private
+const getExpertDetails = async (req, res) => {
+  try {
+    const expertId = req.params.id;
+
+    const expertProfile = await ExpertProfile.findOne({ user: expertId })
+      .populate('user', 'firstName lastName email avatar phone');
+
+    if (!expertProfile) {
+      return res.status(404).json({
+        success: false,
+        message: 'Expert not found'
+      });
+    }
+
+    if (expertProfile.verificationStatus !== 'verified') {
+      return res.status(403).json({
+        success: false,
+        message: 'Expert is not verified'
+      });
+    }
+
+    // Get expert's statistics
+    const totalArticles = await KnowledgeArticle.countDocuments({
+      author: expertId,
+      status: 'published'
+    });
+
+    const totalMentorships = await ExpertMentorship.countDocuments({
+      expert: expertId,
+      status: { $in: ['active', 'completed'] }
+    });
+
+    // Get recent articles
+    const recentArticles = await KnowledgeArticle.find({
+      author: expertId,
+      status: 'published'
+    })
+      .select('title summary thumbnail createdAt views likes')
+      .sort({ createdAt: -1 })
+      .limit(3);
+
+    res.json({
+      success: true,
+      data: {
+        profile: expertProfile,
+        stats: {
+          totalArticles,
+          totalMentorships,
+          rating: expertProfile.rating,
+          reviewCount: expertProfile.reviewCount
+        },
+        recentArticles
+      }
+    });
+  } catch (error) {
+    console.error('Get expert details error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch expert details'
     });
   }
 };
@@ -1023,5 +1179,7 @@ module.exports = {
   createMentorship,
   uploadVerificationDocuments,
   getVerificationDocuments,
-  removeVerificationDocument
+  removeVerificationDocument,
+  getVerifiedExperts,
+  getExpertDetails
 };

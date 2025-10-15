@@ -394,6 +394,72 @@ const uploadExpertDocuments = async (req, res) => {
   }
 };
 
+// @desc    Upload registration documents during signup (no auth required)
+// @route   POST /api/upload/registration-documents
+// @access  Public
+const uploadRegistrationDocuments = async (req, res) => {
+  try {
+    if (!req.files || req.files.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'No document files provided'
+      });
+    }
+
+    const folder = 'adopt-a-farmer/registration-documents';
+    const uploadPromises = req.files.map(file => 
+      uploadDocument(file.path, {
+        folder: folder,
+        originalFilename: file.originalname
+      })
+    );
+    const results = await Promise.all(uploadPromises);
+
+    // Format results
+    const documents = results.map((result, index) => ({
+      url: result.url,
+      publicId: result.publicId,
+      fileName: result.originalFilename || req.files[index].originalname,
+      uploadDate: new Date(),
+      fileSize: result.bytes,
+      format: result.format,
+      resourceType: result.resourceType
+    }));
+
+    // Clean up temp files
+    const cleanupPromises = req.files.map(file => 
+      fs.unlink(file.path).catch(error => 
+        console.log('Temp file cleanup failed:', error.message)
+      )
+    );
+    await Promise.all(cleanupPromises);
+
+    res.json({
+      success: true,
+      message: `${results.length} document(s) uploaded successfully`,
+      data: {
+        documents
+      }
+    });
+  } catch (error) {
+    // Clean up temp files on error
+    if (req.files) {
+      const cleanupPromises = req.files.map(file => 
+        fs.unlink(file.path).catch(unlinkError => 
+          console.log('Temp file cleanup failed:', unlinkError.message)
+        )
+      );
+      await Promise.all(cleanupPromises);
+    }
+
+    console.error('Upload registration documents error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Documents upload failed'
+    });
+  }
+};
+
 // @desc    Upload verification documents (ID, certificates, licenses)
 // @route   POST /api/upload/verification-documents
 // @access  Private
@@ -500,5 +566,6 @@ module.exports = {
   getUploadSignature,
   uploadProfileImage,
   uploadExpertDocuments,
-  uploadVerificationDocuments
+  uploadVerificationDocuments,
+  uploadRegistrationDocuments
 };
