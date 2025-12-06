@@ -21,6 +21,7 @@ const {
   verifyResetOTP,
   resetPassword
 } = require('../controllers/otpController');
+const { googleAuth, updatePhoneNumber } = require('../controllers/googleAuthController');
 const { protect } = require('../middleware/auth');
 const {
   validateRegister,
@@ -52,6 +53,7 @@ const authLimiter = rateLimit({
 // Public routes
 router.post('/register', authLimiter, validateRegister, validate, register);
 router.post('/login', authLimiter, validateLogin, validate, login);
+router.post('/google', googleAuth); // Google OAuth sign-in/sign-up
 router.post('/refresh', refreshToken);
 
 // Protected routes
@@ -131,6 +133,7 @@ router.get('/debug-user/:userId', async (req, res) => {
 });
 
 router.put('/me', protect, updateProfile);
+router.put('/update-phone', protect, updatePhoneNumber); // Update phone number (required after Google sign-in)
 router.post('/logout', protect, logout);
 router.put('/change-password', protect, validatePasswordChange, validate, changePassword);
 

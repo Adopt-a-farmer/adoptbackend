@@ -1792,6 +1792,73 @@ const suspendUser = async (req, res) => {
   }
 };
 
+// @desc    Delete user from the system
+// @route   DELETE /api/admin/users/:id
+// @access  Private (Admin only)
+const deleteUser = async (req, res) => {
+  try {
+    const userId = req.params.id;
+
+    // Find the user first
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+
+    // Prevent deleting admin users
+    if (user.role === 'admin') {
+      return res.status(403).json({
+        success: false,
+        message: 'Cannot delete admin users'
+      });
+    }
+
+    // Delete role-specific profile
+    switch (user.role) {
+      case 'farmer':
+        await FarmerProfile.findOneAndDelete({ user: userId });
+        // Also delete related adoptions
+        await Adoption.deleteMany({ farmer: userId });
+        break;
+      case 'adopter':
+        await AdopterProfile.findOneAndDelete({ user: userId });
+        // Also delete related adoptions
+        await Adoption.deleteMany({ adopter: userId });
+        break;
+      case 'expert':
+        await ExpertProfile.findOneAndDelete({ user: userId });
+        break;
+    }
+
+    // Delete the user
+    await User.findByIdAndDelete(userId);
+
+    console.log(`✅ User deleted: ${user.email} (${user.role})`);
+
+    res.json({
+      success: true,
+      message: `${user.role.charAt(0).toUpperCase() + user.role.slice(1)} deleted successfully`,
+      data: {
+        deletedUser: {
+          id: user._id,
+          email: user.email,
+          role: user.role,
+          name: `${user.firstName} ${user.lastName}`
+        }
+      }
+    });
+  } catch (error) {
+    console.error('Delete user error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error while deleting user'
+    });
+  }
+};
+
 module.exports = {
   getDashboardStats,
   getAllUsers,
@@ -1817,5 +1884,6 @@ module.exports = {
   getAvailableAdopters,
   createAdoption,
   getUserDetailsWithDocuments,
-  suspendUser
+  suspendUser,
+  deleteUser
 };

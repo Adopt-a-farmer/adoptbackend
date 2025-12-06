@@ -67,6 +67,22 @@ const userSchema = new mongoose.Schema({
   resetPasswordExpire: Date,
   emailVerificationToken: String,
   emailVerificationExpire: Date,
+  // Google OAuth fields
+  googleId: {
+    type: String,
+    sparse: true,
+    unique: true,
+    index: true
+  },
+  authProvider: {
+    type: String,
+    enum: ['local', 'google'],
+    default: 'local'
+  },
+  requiresPhoneNumber: {
+    type: Boolean,
+    default: false
+  },
   // Blockchain fields
   blockchainAddress: {
     type: String,

@@ -25,7 +25,8 @@ const {
   getAvailableAdopters,
   createAdoption,
   getUserDetailsWithDocuments,
-  suspendUser
+  suspendUser,
+  deleteUser
 } = require('../controllers/adminController');
 const { protect, authorize } = require('../middleware/auth');
 
@@ -48,6 +49,7 @@ router.get('/users/:id/details', getUserDetailsWithDocuments);
 router.put('/users/:id/status', updateUserStatus);
 router.post('/users/:id/suspend', suspendUser);
 router.put('/users/:id/verify', verifyUser);
+router.delete('/users/:id', deleteUser);
 
 // Farmer management routes
 router.get('/farmers', getAllFarmers);

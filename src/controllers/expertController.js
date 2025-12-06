@@ -541,12 +541,7 @@ const getInvestorFarmerRelationships = async (req, res) => {
       })
       .populate({
         path: 'farmer',
-        select: 'firstName lastName avatar email',
-        populate: {
-          path: 'farmerProfile',
-          model: 'FarmerProfile', 
-          select: 'farmName location farmingType cropTypes verificationStatus'
-        }
+        select: 'firstName lastName avatar email'
       })
       .sort({ createdAt: -1 })
       .skip(skip)
@@ -554,13 +549,33 @@ const getInvestorFarmerRelationships = async (req, res) => {
 
     const total = await Adoption.countDocuments({ status: 'active' });
 
+    // Get unique farmer IDs to fetch their profiles
+    const farmerIds = [...new Set(adoptions.map(a => a.farmer?._id?.toString()).filter(Boolean))];
+    
+    // Fetch farmer profiles separately
+    const farmerProfiles = await FarmerProfile.find({ user: { $in: farmerIds } })
+      .select('user farmName location farmingType cropTypes verificationStatus');
+    
+    // Create a map of farmer profiles by user ID
+    const profileMap = {};
+    farmerProfiles.forEach(profile => {
+      profileMap[profile.user.toString()] = profile;
+    });
+
     // Group by farmer to show all their investors
     const farmerInvestorMap = {};
     adoptions.forEach(adoption => {
+      if (!adoption.farmer) return;
+      
       const farmerId = adoption.farmer._id.toString();
+      const farmerProfile = profileMap[farmerId];
+      
       if (!farmerInvestorMap[farmerId]) {
         farmerInvestorMap[farmerId] = {
-          farmer: adoption.farmer,
+          farmer: {
+            ...adoption.farmer.toObject(),
+            farmerProfile: farmerProfile || null
+          },
           investors: [],
           totalInvestment: 0
         };
@@ -570,12 +585,12 @@ const getInvestorFarmerRelationships = async (req, res) => {
         adoption: {
           _id: adoption._id,
           adoptionType: adoption.adoptionType,
-          startDate: adoption.adoptionDetails.duration.start,
-          endDate: adoption.adoptionDetails.duration.end,
+          startDate: adoption.adoptionDetails?.duration?.start,
+          endDate: adoption.adoptionDetails?.duration?.end,
           status: adoption.status
         }
       });
-      farmerInvestorMap[farmerId].totalInvestment += adoption.paymentPlan.totalAmount || 0;
+      farmerInvestorMap[farmerId].totalInvestment += adoption.paymentPlan?.totalAmount || 0;
     });
 
     const farmerInvestorRelationships = Object.values(farmerInvestorMap);

@@ -94,6 +94,9 @@ const protect = async (req, res, next) => {
 
 // Role authorization middleware
 const authorize = (...roles) => {
+  // Flatten roles array in case an array was passed (e.g., authorize(['admin', 'expert']))
+  const flatRoles = roles.flat();
+  
   return (req, res, next) => {
     if (!req.user) {
       console.error('❌ Authorization failed: User not authenticated');
@@ -104,7 +107,7 @@ const authorize = (...roles) => {
     }
 
     const userRole = req.user.role ? String(req.user.role).trim() : '';
-    const requiredRoles = roles.map(role => String(role).trim());
+    const requiredRoles = flatRoles.map(role => String(role).trim());
 
     console.log(`🔍 Authorization check:`);
     console.log(`   User ID: ${req.user._id}`);

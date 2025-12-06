@@ -100,17 +100,52 @@ const getKnowledgeArticle = async (req, res) => {
 // @access  Private (Expert/Admin only)
 const createKnowledgeArticle = async (req, res) => {
   try {
+    const { title, content, category, difficulty, tags, status } = req.body;
+    
+    // Validate required fields
+    if (!title || !title.trim()) {
+      return res.status(400).json({
+        success: false,
+        message: 'Title is required'
+      });
+    }
+    
+    if (!content || !content.trim()) {
+      return res.status(400).json({
+        success: false,
+        message: 'Content is required'
+      });
+    }
+    
+    if (!category) {
+      return res.status(400).json({
+        success: false,
+        message: 'Category is required'
+      });
+    }
+
     const articleData = {
-      ...req.body,
+      title: title.trim(),
+      content: content.trim(),
+      category,
+      difficulty: difficulty || 'beginner',
+      tags: tags ? (typeof tags === 'string' ? JSON.parse(tags) : tags) : [],
       author: req.user._id,
-      slug: req.body.title.toLowerCase().replace(/[^a-zA-Z0-9]/g, '-'),
+      slug: title.toLowerCase().replace(/[^a-zA-Z0-9]/g, '-').replace(/-+/g, '-'),
       isExpert: req.user.role === 'expert' || req.user.role === 'admin'
     };
+    
+    // Handle featured image if uploaded
+    if (req.file) {
+      articleData.featuredImage = `/uploads/articles/${req.file.filename}`;
+    }
 
     // Auto-publish if user is admin or expert
     if (req.user.role === 'admin' || req.user.role === 'expert') {
-      articleData.status = 'published';
+      articleData.status = status || 'published';
       articleData.publishedAt = new Date();
+    } else {
+      articleData.status = status || 'draft';
     }
 
     const article = await KnowledgeArticle.create(articleData);

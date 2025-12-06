@@ -42,11 +42,16 @@ const register = async (req, res) => {
       phone
     };
 
-    // Auto-verify admin users
-    if (role === 'admin') {
-      userData.isVerified = true;
-      userData.isEmailVerified = true;
+    // Auto-verify all users (no OTP required)
+    userData.isVerified = true;
+    userData.isEmailVerified = true;
+    
+    // Set verification status based on role
+    if (role === 'admin' || role === 'adopter') {
       userData.verificationStatus = 'verified';
+    } else {
+      // Farmers and experts need admin verification for their profiles
+      userData.verificationStatus = 'pending';
     }
 
     // Add avatar if provided
@@ -305,44 +310,8 @@ const login = async (req, res) => {
 
     console.log('✅ Password verified for:', email);
 
-    // Check email verification (skip for admin users)
-    if (!user.isEmailVerified && user.role !== 'admin') {
-      console.log('⚠️ Login blocked: Email not verified for:', email);
-      
-      // Generate new OTP for unverified user using shared utility
-      const { storeOTP } = require('../utils/otpUtils');
-      const { token, otp } = storeOTP(user.email, {
-        userId: user._id,
-        firstName: user.firstName,
-        lastName: user.lastName,
-        phone: user.phone,
-        role: user.role
-      });
-
-      console.log('📧 Auto-generating OTP for unverified user:', {
-        email,
-        otp: `${otp.substring(0, 2)}****`
-      });
-
-      // Send response that triggers frontend to redirect to OTP page
-      return res.status(403).json({
-        success: false,
-        requiresVerification: true,
-        message: 'Email verification required. Please check your email for the verification code.',
-        email: user.email,
-        token,
-        redirectTo: '/verify-email',
-        ...(process.env.USE_MOCK_EMAIL === 'true' && { 
-          developmentOTP: otp,
-          note: 'This OTP is shown because USE_MOCK_EMAIL is enabled' 
-        })
-      });
-    }
-
-    // Log admin bypass
-    if (!user.isEmailVerified && user.role === 'admin') {
-      console.log('🔑 Admin user bypassing email verification:', email);
-    }
+    // Email verification is no longer required - users are auto-verified on registration
+    // Skip this check for all users
 
     // Generate tokens
     const token = generateToken(user._id);
